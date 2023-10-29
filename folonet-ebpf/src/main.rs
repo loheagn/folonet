@@ -2,14 +2,25 @@
 #![no_main]
 #![feature(offset_of)]
 
-use aya_bpf::{bindings::xdp_action, helpers::bpf_csum_diff, macros::xdp, programs::XdpContext};
-use aya_log_ebpf::info;
-use core::mem::{self, offset_of};
-use folonet_common::{csum_fold_helper, L4Hdr, Way};
+use aya_bpf::{
+    bindings::xdp_action,
+    helpers::bpf_csum_diff,
+    macros::{map, xdp},
+    maps::HashMap,
+    programs::XdpContext,
+};
+
+use aya_log_ebpf::debug;
+use core::{
+    mem::{self, offset_of},
+    ptr::copy,
+};
+use folonet_common::{csum_fold_helper, BiPort, KConnection, KEndpoint, L4Hdr, Mac, LOCAL_IP};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{IpProto, Ipv4Hdr},
     tcp::TcpHdr,
+    udp::UdpHdr,
 };
 
 #[panic_handler]
@@ -25,6 +36,7 @@ pub fn folonet(ctx: XdpContext) -> u32 {
     }
 }
 
+#[inline(always)]
 fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*mut T, ()> {
     let start_addr = ctx.data();
 
@@ -35,77 +47,141 @@ fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*mut T, ()> {
     Ok((start_addr + offset) as *mut T)
 }
 
-const CLIENT_IP: u32 = 3232262401;
-const SERVER_IP: u32 = 3232262406;
-const LOCAL_IP: u32 = 3232262404;
+#[map]
+static CONNECTION: HashMap<KConnection, KConnection> = HashMap::with_max_entries(1024, 0);
 
-const SERVER_MAC: [u8; 6] = [82, 85, 85, 61, 116, 111];
-const LOCAL_MAC: [u8; 6] = [82, 85, 85, 93, 65, 176];
-const CLIENT_MAC: [u8; 6] = [0x5e, 0x52, 0x30, 0xa9, 0xb5, 0x64];
+#[map]
+static SERVER_MAP: HashMap<KEndpoint, KEndpoint> = HashMap::with_max_entries(1024, 0);
+
+#[map]
+static SERVER_PORT_MAP: HashMap<KEndpoint, u8> = HashMap::with_max_entries(1024, 0);
+
+#[map]
+static IP_MAC_MAP: HashMap<u32, Mac> = HashMap::with_max_entries(1024, 0);
 
 #[inline(always)]
-fn set_mac(ctx: &XdpContext, src_mac: &[u8; 6], dst_mac: &[u8; 6]) -> Result<(), ()> {
-    let src_mac_ptr: *mut [u8; 6] = ptr_at(&ctx, offset_of!(EthHdr, src_addr))?;
-    src_mac.iter().enumerate().for_each(|(i, &b)| unsafe {
-        *((src_mac_ptr as usize + i) as *mut u8) = b;
-    });
+fn extract_way(iphdr: *const Ipv4Hdr, l4_hdr: &L4Hdr) -> Result<KConnection, ()> {
+    let src_ip = unsafe { (*iphdr).src_addr };
+    let dst_ip = unsafe { (*iphdr).dst_addr };
 
-    let dst_mac_ptr: *mut [u8; 6] = ptr_at(&ctx, offset_of!(EthHdr, dst_addr))?;
-    dst_mac.iter().enumerate().for_each(|(i, &b)| unsafe {
-        *((dst_mac_ptr as usize + i) as *mut u8) = b;
-    });
+    let src_port = l4_hdr.get_source();
+    let dst_port = l4_hdr.get_dest();
 
-    Ok(())
+    let connection = KConnection {
+        from: KEndpoint::new(src_ip, src_port),
+        to: KEndpoint::new(dst_ip, dst_port),
+    };
+
+    Ok(connection)
 }
 
 #[inline(always)]
-fn replace_update_csum<T>(ctx: &XdpContext, offset: usize, new_val: u32) -> Result<(), ()>
-where
-    *mut T: Into<L4Hdr>,
-{
-    let l4_hdr: *mut T = ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
-    let l4_hdr: L4Hdr = l4_hdr.into();
+fn update_csum(
+    ctx: &XdpContext,
+    iphdr: *mut Ipv4Hdr,
+    l4_hdr: &mut L4Hdr,
+    offset: usize,
+    new_val: u32,
+    update_ip_csum: bool,
+) -> Result<(), ()> {
     let old_l4_csum = l4_hdr.get_check();
     let from_ptr: *mut u32 = ptr_at(&ctx, offset)?;
-    let mut new_val: u32 = new_val.to_be();
+    let mut new_val = new_val;
     let to_ptr: *mut u32 = &mut new_val as *mut u32;
     let new_l4_csum = unsafe { bpf_csum_diff(from_ptr, 4, to_ptr, 4, !(old_l4_csum) as u32) };
     l4_hdr.set_check(csum_fold_helper(new_l4_csum as u64));
 
-    let iphdr: *mut Ipv4Hdr = ptr_at(ctx, EthHdr::LEN)?;
-    let old_ip_csum = unsafe { (*iphdr).check };
-    let new_ip_csum = unsafe { bpf_csum_diff(from_ptr, 4, to_ptr, 4, !(old_ip_csum) as u32) };
-    unsafe { (*iphdr).check = csum_fold_helper(new_ip_csum as u64) }
+    if update_ip_csum {
+        let old_ip_csum = unsafe { (*iphdr).check };
+        let new_ip_csum = unsafe { bpf_csum_diff(from_ptr, 4, to_ptr, 4, !(old_ip_csum) as u32) };
+        unsafe { (*iphdr).check = csum_fold_helper(new_ip_csum as u64) }
+    }
 
     Ok(())
 }
 
 #[inline(always)]
-fn update_packet_by_way(ctx: &XdpContext, way: &Way) -> Result<(), ()> {
-    let ipv4hdr: *mut Ipv4Hdr = ptr_at(ctx, EthHdr::LEN)?;
+fn update_packet_by_way(
+    ctx: &XdpContext,
+    ethhdr: *mut EthHdr,
+    iphdr: *mut Ipv4Hdr,
+    l4_hdr: &mut L4Hdr,
+    way: &KConnection,
+) -> Result<(), ()> {
+    let dst = way.to;
+    let src = way.from;
 
     // update dst ip
-    replace_update_csum::<TcpHdr>(
+    update_csum(
         &ctx,
+        iphdr,
+        l4_hdr,
         EthHdr::LEN + offset_of!(Ipv4Hdr, dst_addr),
-        way.dst_ip,
+        dst.ip(),
+        true,
     )?;
     unsafe {
-        (*ipv4hdr).dst_addr = way.dst_ip.to_be();
+        (*iphdr).dst_addr = dst.ip();
     };
 
     // udpate src ip
-    replace_update_csum::<TcpHdr>(
+    update_csum(
         &ctx,
+        iphdr,
+        l4_hdr,
         EthHdr::LEN + offset_of!(Ipv4Hdr, src_addr),
-        way.src_ip,
+        src.ip(),
+        true,
     )?;
     unsafe {
-        (*ipv4hdr).src_addr = way.src_ip.to_be();
+        (*iphdr).src_addr = src.ip();
     }
 
-    set_mac(&ctx, &way.src_mac, &way.dst_mac)?;
+    // update port
+    let bi_port = BiPort::new(src.port(), dst.port());
+    update_csum(
+        ctx,
+        iphdr,
+        l4_hdr,
+        EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(TcpHdr, source),
+        BiPort::new(src.port(), dst.port()).into(),
+        false,
+    )?;
+    l4_hdr.set_bi_port(&bi_port);
 
+    // set mac
+    let src_mac: Mac = unsafe { (*ethhdr).src_addr }.into();
+    let src_mac: [u8; 6] = src_mac.into();
+    let src_mac_ptr: *mut [u8; 6] =
+        ((ethhdr as usize) + offset_of!(EthHdr, src_addr)) as *mut [u8; 6];
+
+    let dst_mac: [u8; 6] = if let Some(mac) = unsafe { IP_MAC_MAP.get(&dst.ip()) } {
+        (*mac).into()
+    } else {
+        unsafe { *((ethhdr as usize + offset_of!(EthHdr, src_addr)) as *const [u8; 6]) }
+    };
+    let dst_mac_ptr: *mut [u8; 6] =
+        ((ethhdr as usize) + offset_of!(EthHdr, dst_addr)) as *mut [u8; 6];
+
+    unsafe {
+        copy(&src_mac, src_mac_ptr, 6);
+        copy(&dst_mac, dst_mac_ptr, 6);
+    }
+
+    Ok(())
+}
+
+#[inline(always)]
+fn debug_connection(ctx: &XdpContext, way: &KConnection, extra_info: &str) -> Result<(), ()> {
+    debug!(
+        ctx,
+        "{} from {:i}:{}, to {:i}:{}",
+        extra_info,
+        u32::from_be(way.from.ip()),
+        u16::from_be(way.from.port()),
+        u32::from_be(way.to.ip()),
+        u16::from_be(way.to.port())
+    );
     Ok(())
 }
 
@@ -117,37 +193,56 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         _ => return Ok(xdp_action::XDP_PASS),
     }
 
-    let ipv4hdr: *mut Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
+    let iphdr: *mut Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
 
-    let proto: IpProto = unsafe { (*ipv4hdr).proto };
+    let proto: IpProto = unsafe { (*iphdr).proto };
 
-    if proto != IpProto::Tcp {
-        return Ok(xdp_action::XDP_PASS);
-    }
-
-    let source_addr = u32::from_be(unsafe { (*ipv4hdr).src_addr });
-
-    info!(&ctx, "catch source ip: {:i}", source_addr);
-
-    let way = match source_addr {
-        SERVER_IP => Way {
-            src_ip: LOCAL_IP,
-            dst_ip: CLIENT_IP,
-            src_mac: LOCAL_MAC,
-            dst_mac: CLIENT_MAC,
-        },
-        CLIENT_IP => Way {
-            src_ip: LOCAL_IP,
-            dst_ip: SERVER_IP,
-            src_mac: LOCAL_MAC,
-            dst_mac: SERVER_MAC,
-        },
+    let mut l4_hdr: L4Hdr = match proto {
+        IpProto::Tcp => {
+            let tcphdr: *mut TcpHdr = ptr_at(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
+            L4Hdr::TcpHdr(tcphdr)
+        }
+        IpProto::Udp => {
+            let udphdr: *mut UdpHdr = ptr_at(&ctx, EthHdr::LEN + Ipv4Hdr::LEN)?;
+            L4Hdr::UdpHdr(udphdr)
+        }
         _ => return Ok(xdp_action::XDP_PASS),
     };
 
-    info!(&ctx, "deal with source ip: {:i}", source_addr);
+    let declare_way = extract_way(iphdr, &l4_hdr)?;
 
-    update_packet_by_way(&ctx, &way)?;
+    debug_connection(&ctx, &declare_way, "input: ")?;
 
-    Ok(xdp_action::XDP_TX)
+    if unsafe { CONNECTION.get(&declare_way) }.is_none() {
+        if unsafe { SERVER_PORT_MAP.get(&declare_way.to) }.is_none() {
+            return Ok(xdp_action::XDP_PASS);
+        }
+
+        // create output way
+        // find a available way
+        let from = KEndpoint::new(LOCAL_IP.to_be(), 8899u16.to_be());
+        let to = match unsafe { SERVER_MAP.get(&declare_way.to) } {
+            Some(to) => to,
+            None => return Ok(xdp_action::XDP_PASS),
+        };
+        let out_way = KConnection { from, to: *to };
+        CONNECTION
+            .insert(&declare_way, &out_way, 0)
+            .map_err(|_| ())?;
+
+        // and, we need to record the return way
+        let return_output_way = out_way.reverse();
+        let return_declare_way = &declare_way.reverse();
+        CONNECTION
+            .insert(&return_output_way, &return_declare_way, 0)
+            .map_err(|_| ())?;
+    }
+
+    if let Some(output_way) = unsafe { CONNECTION.get(&declare_way) } {
+        debug_connection(&ctx, &output_way, "output:")?;
+        update_packet_by_way(&ctx, ethhdr, iphdr, &mut l4_hdr, &output_way)?;
+        return Ok(xdp_action::XDP_TX);
+    }
+
+    Ok(xdp_action::XDP_PASS)
 }
