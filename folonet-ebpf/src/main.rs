@@ -6,7 +6,7 @@ use aya_bpf::{
     bindings::xdp_action,
     helpers::bpf_csum_diff,
     macros::{map, xdp},
-    maps::HashMap,
+    maps::{HashMap, RingBuf},
     programs::XdpContext,
 };
 
@@ -58,6 +58,9 @@ static SERVER_PORT_MAP: HashMap<KEndpoint, u8> = HashMap::with_max_entries(1024,
 
 #[map]
 static IP_MAC_MAP: HashMap<u32, Mac> = HashMap::with_max_entries(1024, 0);
+
+#[map]
+static PACKET_EVENT: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
 
 #[inline(always)]
 fn extract_way(iphdr: *const Ipv4Hdr, l4_hdr: &L4Hdr) -> Result<KConnection, ()> {
@@ -210,6 +213,11 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
     };
 
     let declare_way = extract_way(iphdr, &l4_hdr)?;
+
+    if let Some(mut e) = PACKET_EVENT.reserve::<u32>(0) {
+        e.write(declare_way.from.ip());
+        e.submit(0);
+    }
 
     debug_connection(&ctx, &declare_way, "input: ")?;
 

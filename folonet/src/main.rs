@@ -1,11 +1,17 @@
 use anyhow::{Context, Ok};
-use aya::maps::HashMap as AyaHashmap;
+use aya::maps::{HashMap as AyaHashmap, RingBuf};
 use aya::programs::{Xdp, XdpFlags};
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
+use byteorder::{BigEndian, ReadBytesExt};
 use clap::Parser;
 use folonet_common::{KEndpoint, Mac, CLIENT_IP, CLIENT_MAC, LOCAL_IP, SERVER_IP, SERVER_MAC};
 use log::{debug, info, warn};
+use std::net::Ipv4Addr;
+use std::ops::Deref;
+use std::os::fd::AsRawFd;
+use tokio::io::unix::AsyncFd;
+use tokio::runtime::Runtime;
 use tokio::signal;
 
 use crate::endpoint::Endpoint;
@@ -16,6 +22,24 @@ mod endpoint;
 struct Opt {
     #[clap(short, long, default_value = "lima0")]
     iface: String,
+}
+
+fn get_bpf() -> Bpf {
+    // This will include your eBPF object file as raw bytes at compile-time and load it at
+    // runtime. This approach is recommended for most real-world use cases. If you would
+    // like to specify the eBPF program at runtime rather than at compile-time, you can
+    // reach for `Bpf::load_file` instead.
+    #[cfg(debug_assertions)]
+    let bpf = Bpf::load(include_bytes_aligned!(
+        "../../target/bpfel-unknown-none/debug/folonet"
+    ))
+    .unwrap();
+    #[cfg(not(debug_assertions))]
+    let bpf = Bpf::load(include_bytes_aligned!(
+        "../../target/bpfel-unknown-none/release/folonet"
+    ))
+    .unwrap();
+    bpf
 }
 
 #[tokio::main]
@@ -33,18 +57,7 @@ async fn main() -> Result<(), anyhow::Error> {
         debug!("remove limit on locked memory failed, ret is: {}", ret);
     }
 
-    // This will include your eBPF object file as raw bytes at compile-time and load it at
-    // runtime. This approach is recommended for most real-world use cases. If you would
-    // like to specify the eBPF program at runtime rather than at compile-time, you can
-    // reach for `Bpf::load_file` instead.
-    #[cfg(debug_assertions)]
-    let mut bpf = Bpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/debug/folonet"
-    ))?;
-    #[cfg(not(debug_assertions))]
-    let mut bpf = Bpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/release/folonet"
-    ))?;
+    let mut bpf = get_bpf();
 
     if let Err(e) = BpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
@@ -79,6 +92,24 @@ async fn main() -> Result<(), anyhow::Error> {
         };
         program.attach(&opt.iface, XdpFlags::default())
                 .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE").unwrap();
+    });
+
+    std::thread::spawn(move || {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut ring_buf: RingBuf<&mut aya::maps::MapData> =
+                RingBuf::try_from(bpf.map_mut("PACKET_EVENT").unwrap()).unwrap();
+            let fd = AsyncFd::new(ring_buf.as_raw_fd()).unwrap();
+            loop {
+                let _ = fd.readable().await.unwrap();
+
+                if let Some(item) = ring_buf.next() {
+                    let mut data = item.deref();
+                    let a = Ipv4Addr::from(data.read_u32::<BigEndian>().unwrap());
+                    info!("data: {}", a.to_string());
+                }
+            }
+        });
     });
 
     info!("Waiting for Ctrl-C...");
