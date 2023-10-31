@@ -3,22 +3,29 @@ use aya::maps::{HashMap as AyaHashmap, RingBuf};
 use aya::programs::{Xdp, XdpFlags};
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
-use byteorder::{BigEndian, ReadBytesExt};
 use clap::Parser;
+use event::Direction;
 use folonet_common::{
     KEndpoint, Mac, Notification, CLIENT_IP, CLIENT_MAC, LOCAL_IP, SERVER_IP, SERVER_MAC,
 };
 use log::{debug, info, warn};
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
 use std::os::fd::AsRawFd;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tokio::runtime::Runtime;
 use tokio::signal;
+use tokio::sync::Mutex as TokioMutex;
 
-use crate::endpoint::Endpoint;
+use crate::endpoint::{endpoint_pair_from_notification, Endpoint};
+use crate::event::EndpointState;
 
 mod endpoint;
+mod event;
+mod tcp_fsm;
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -99,6 +106,8 @@ async fn main() -> Result<(), anyhow::Error> {
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
+            let endpoint_state_map: GlobalStateMap = Arc::new(TokioMutex::new(HashMap::new()));
+
             let mut ring_buf: RingBuf<&mut aya::maps::MapData> =
                 RingBuf::try_from(bpf.map_mut("PACKET_EVENT").unwrap()).unwrap();
             let fd = AsyncFd::new(ring_buf.as_raw_fd()).unwrap();
@@ -106,10 +115,25 @@ async fn main() -> Result<(), anyhow::Error> {
                 let _ = fd.readable().await.unwrap();
 
                 if let Some(item) = ring_buf.next() {
-                    let data = item.deref();
-                    let a = Notification::from_bytes(data);
-                    let ip: Ipv4Addr = u32::from_be(a.connection.from.ip()).into();
-                    info!("data: {}", ip.to_string());
+                    let notification = Notification::from_bytes(item.deref());
+                    let (from_endpoint, to_endpoint) =
+                        endpoint_pair_from_notification(&notification);
+
+                    endpoint_state_handle_notification(
+                        endpoint_state_map.clone(),
+                        from_endpoint,
+                        notification,
+                        notification.is_tcp(),
+                        Direction::From,
+                    );
+
+                    endpoint_state_handle_notification(
+                        endpoint_state_map.clone(),
+                        to_endpoint,
+                        notification,
+                        notification.is_tcp(),
+                        Direction::To,
+                    );
                 }
             }
         });
@@ -120,4 +144,29 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Exiting...");
 
     Ok(())
+}
+
+type GlobalStateMap = Arc<TokioMutex<HashMap<Endpoint, Arc<TokioMutex<EndpointState>>>>>;
+
+fn endpoint_state_handle_notification(
+    state_map: GlobalStateMap,
+    e: Endpoint,
+    notification: Notification,
+    is_tcp: bool,
+    direction: Direction,
+) {
+    tokio::spawn(async move {
+        let mut state_map_guard = state_map.lock().await;
+        let state = state_map_guard
+            .entry(e.clone())
+            .or_insert_with(|| Arc::new(TokioMutex::new(EndpointState::new(is_tcp))))
+            .clone();
+        drop(state_map_guard);
+
+        let mut state = state.lock().await;
+        state
+            .handle_notification(notification, direction)
+            .await
+            .unwrap();
+    });
 }

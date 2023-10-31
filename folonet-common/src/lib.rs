@@ -102,7 +102,6 @@ impl Into<u32> for BiPort {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
-
 pub struct KConnection {
     pub from: KEndpoint,
     pub to: KEndpoint,
@@ -141,7 +140,7 @@ pub fn csum_fold_helper(csum: u64) -> u16 {
     !csum as u16
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 
 pub struct KEndpoint(u64);
 
@@ -206,8 +205,14 @@ pub struct Notification {
 pub const NOTIFICATION_SIZE: usize = core::mem::size_of::<Notification>();
 
 impl Notification {
-    pub const fn from_bytes(bs: &[u8]) -> &Self {
-        unsafe { core::mem::transmute::<*const u8, &Notification>(bs.as_ptr()) }
+    pub fn from_bytes(bs: &[u8]) -> Self {
+        unsafe { *core::mem::transmute::<*const u8, *const Notification>(bs.as_ptr()) }.clone()
+    }
+
+    pub fn is_tcp(&self) -> bool {
+        match self.event {
+            Event::Packet(_) => true,
+        }
     }
 }
 
@@ -306,6 +311,6 @@ mod test {
 
         let got_notification = Notification::from_bytes(bs);
 
-        assert_eq!(&notification, got_notification);
+        assert_eq!(notification, got_notification);
     }
 }
