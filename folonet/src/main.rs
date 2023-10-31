@@ -5,7 +5,9 @@ use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
 use byteorder::{BigEndian, ReadBytesExt};
 use clap::Parser;
-use folonet_common::{KEndpoint, Mac, CLIENT_IP, CLIENT_MAC, LOCAL_IP, SERVER_IP, SERVER_MAC};
+use folonet_common::{
+    KEndpoint, Mac, Notification, CLIENT_IP, CLIENT_MAC, LOCAL_IP, SERVER_IP, SERVER_MAC,
+};
 use log::{debug, info, warn};
 use std::net::Ipv4Addr;
 use std::ops::Deref;
@@ -104,9 +106,10 @@ async fn main() -> Result<(), anyhow::Error> {
                 let _ = fd.readable().await.unwrap();
 
                 if let Some(item) = ring_buf.next() {
-                    let mut data = item.deref();
-                    let a = Ipv4Addr::from(data.read_u32::<BigEndian>().unwrap());
-                    info!("data: {}", a.to_string());
+                    let data = item.deref();
+                    let a = Notification::from_bytes(data);
+                    let ip: Ipv4Addr = u32::from_be(a.connection.from.ip()).into();
+                    info!("data: {}", ip.to_string());
                 }
             }
         });

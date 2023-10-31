@@ -1,7 +1,10 @@
 #![no_std]
 
 use byteorder::{BigEndian, ByteOrder};
+use event::Event;
 use network_types::{tcp::TcpHdr, udp::UdpHdr};
+
+pub mod event;
 
 pub const CLIENT_IP: u32 = 3232262401;
 pub const SERVER_IP: u32 = 3232262406;
@@ -9,7 +12,7 @@ pub const LOCAL_IP: u32 = 3232262404;
 
 pub const SERVER_MAC: [u8; 6] = [82, 85, 85, 61, 116, 111];
 pub const LOCAL_MAC: [u8; 6] = [82, 85, 85, 93, 65, 176];
-pub const CLIENT_MAC: [u8; 6] = [0x5e, 0x52, 0x30, 0xa9, 0xb5, 0x64];
+pub const CLIENT_MAC: [u8; 6] = [0x5e, 0x52, 0x30, 0xa9, 0xb5, 0x67];
 
 pub enum L4Hdr {
     TcpHdr(*mut TcpHdr),
@@ -70,6 +73,13 @@ impl L4Hdr {
             },
         }
     }
+
+    pub fn inner_tcp_ptr(&self) -> Option<*mut TcpHdr> {
+        match self {
+            L4Hdr::TcpHdr(hdr) => Some(*hdr),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +101,8 @@ impl Into<u32> for BiPort {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+
 pub struct KConnection {
     pub from: KEndpoint,
     pub to: KEndpoint,
@@ -130,7 +141,8 @@ pub fn csum_fold_helper(csum: u64) -> u16 {
     !csum as u16
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+
 pub struct KEndpoint(u64);
 
 impl KEndpoint {
@@ -184,6 +196,29 @@ impl Into<[u8; 6]> for Mac {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+
+pub struct Notification {
+    pub connection: KConnection,
+    pub event: Event,
+}
+
+pub const NOTIFICATION_SIZE: usize = core::mem::size_of::<Notification>();
+
+impl Notification {
+    pub const fn from_bytes(bs: &[u8]) -> &Self {
+        unsafe { core::mem::transmute::<*const u8, &Notification>(bs.as_ptr()) }
+    }
+}
+
+#[inline(always)]
+pub fn packet_notification(connection: KConnection, tcphdr: *const TcpHdr) -> Notification {
+    Notification {
+        connection,
+        event: Event::new_packet_event(tcphdr),
+    }
+}
+
 mod test {
 
     #[test]
@@ -223,5 +258,54 @@ mod test {
 
         assert_eq!(src_port, sp);
         assert_eq!(dst_port, dp);
+    }
+
+    #[test]
+    fn test_notification_align() {
+        use crate::Notification;
+
+        assert_eq!(8 % core::mem::align_of::<Notification>(), 0);
+    }
+
+    #[test]
+    fn test_notification_write_read_bytes() {
+        use crate::{
+            event::{Event, Packet, PacketFlag},
+            KConnection, KEndpoint, Notification, LOCAL_IP,
+        };
+
+        let ip = LOCAL_IP;
+        let port: u16 = 80;
+        let endpoint = KEndpoint::new(ip.to_be(), port.to_be());
+        let connection = KConnection {
+            from: endpoint,
+            to: endpoint,
+        };
+
+        let packet = Packet {
+            flag: PacketFlag::ACK | PacketFlag::SYN,
+            ack_seq: 128,
+            seq: 129,
+        };
+
+        let notification = Notification {
+            connection,
+            event: Event::Packet(packet),
+        };
+
+        let p = &notification as *const Notification;
+
+        const SIZE: usize = core::mem::size_of::<Notification>();
+
+        let mut buffer = [0; SIZE];
+        unsafe {
+            core::ptr::copy_nonoverlapping(p as *const u8, buffer.as_mut_ptr(), SIZE);
+        }
+
+        let bs: &[u8] = &buffer[..];
+
+        let got_notification = Notification::from_bytes(bs);
+
+        assert_eq!(&notification, got_notification);
     }
 }

@@ -11,6 +11,7 @@ user = ["aya"]
 aya = { git = "https://github.com/aya-rs/aya", optional = true }
 network-types = "0.0.4"
 byteorder = { version = "1", default-features = false }
+bitflags = "2.4.1"
 
 [lib]
 path = "src/lib.rs"

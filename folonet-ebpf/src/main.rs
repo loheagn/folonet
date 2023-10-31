@@ -15,7 +15,10 @@ use core::{
     mem::{self, offset_of},
     ptr::copy,
 };
-use folonet_common::{csum_fold_helper, BiPort, KConnection, KEndpoint, L4Hdr, Mac, LOCAL_IP};
+use folonet_common::{
+    csum_fold_helper, event::Event, BiPort, KConnection, KEndpoint, L4Hdr, Mac, Notification,
+    LOCAL_IP,
+};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{IpProto, Ipv4Hdr},
@@ -214,11 +217,6 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
 
     let declare_way = extract_way(iphdr, &l4_hdr)?;
 
-    if let Some(mut e) = PACKET_EVENT.reserve::<u32>(0) {
-        e.write(declare_way.from.ip());
-        e.submit(0);
-    }
-
     debug_connection(&ctx, &declare_way, "input: ")?;
 
     if unsafe { CONNECTION.get(&declare_way) }.is_none() {
@@ -246,11 +244,32 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
             .map_err(|_| ())?;
     }
 
-    if let Some(output_way) = unsafe { CONNECTION.get(&declare_way) } {
-        debug_connection(&ctx, &output_way, "output:")?;
-        update_packet_by_way(&ctx, ethhdr, iphdr, &mut l4_hdr, &output_way)?;
-        return Ok(xdp_action::XDP_TX);
+    let output_way = unsafe { CONNECTION.get(&declare_way) };
+
+    if output_way.is_none() {
+        return Ok(xdp_action::XDP_PASS);
     }
 
-    Ok(xdp_action::XDP_PASS)
+    let output_way = output_way.unwrap();
+
+    debug_connection(&ctx, &output_way, "output:")?;
+
+    // if is tcp connection, notify to userspace
+    if let Some(tcphdr) = l4_hdr.inner_tcp_ptr() {
+        if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
+            let notification = Notification {
+                connection: KConnection {
+                    from: declare_way.from,
+                    to: output_way.to,
+                },
+                event: Event::new_packet_event(tcphdr),
+            };
+            e.write(notification);
+            e.submit(0);
+        }
+    }
+
+    update_packet_by_way(&ctx, ethhdr, iphdr, &mut l4_hdr, &output_way)?;
+
+    Ok(xdp_action::XDP_TX)
 }

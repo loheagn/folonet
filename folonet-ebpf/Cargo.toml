@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 aya-bpf = { git = "https://github.com/aya-rs/aya" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
+bitflags = "2.4.1"
 folonet-common = { path = "../folonet-common" }
 network-types = "0.0.4"
 
