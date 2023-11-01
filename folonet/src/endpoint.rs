@@ -14,7 +14,7 @@ impl Endpoint {
     }
 
     pub fn port(&self) -> u16 {
-        u16::from_be(self.port())
+        u16::from_be(self.0.port())
     }
 }
 

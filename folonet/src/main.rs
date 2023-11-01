@@ -94,7 +94,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let program: &mut Xdp = bpf.program_mut("folonet").unwrap().try_into().unwrap();
     program.load().unwrap();
 
-    let iface_list = ["lima0", "lima1"];
+    let iface_list = ["ens33", "ens37", "lo"];
     iface_list.iter().for_each(|iface| {
         let opt = Opt {
             iface: iface.to_string(),

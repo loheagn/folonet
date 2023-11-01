@@ -6,13 +6,17 @@ use network_types::{tcp::TcpHdr, udp::UdpHdr};
 
 pub mod event;
 
-pub const CLIENT_IP: u32 = 3232262401;
-pub const SERVER_IP: u32 = 3232262406;
-pub const LOCAL_IP: u32 = 3232262404;
+pub const CLIENT_IP: u32 = build_ip_u32(192, 168, 174, 142);
+// pub const CLIENT_IP: u32 = build_ip_u32(192, 168, 174, 139);
 
-pub const SERVER_MAC: [u8; 6] = [82, 85, 85, 61, 116, 111];
-pub const LOCAL_MAC: [u8; 6] = [82, 85, 85, 93, 65, 176];
-pub const CLIENT_MAC: [u8; 6] = [0x5e, 0x52, 0x30, 0xa9, 0xb5, 0x67];
+pub const SERVER_IP: u32 = build_ip_u32(192, 168, 174, 141);
+pub const LOCAL_IP: u32 = build_ip_u32(192, 168, 174, 140);
+
+pub const SERVER_MAC: [u8; 6] = [0x00, 0x50, 0x56, 0x3e, 0xa4, 0xf6];
+pub const LOCAL_MAC: [u8; 6] = [0x00, 0x0c, 0x29, 0x6e, 0xcc, 0x7e];
+
+pub const CLIENT_MAC: [u8; 6] = [0x00, 0x50, 0x56, 0x3e, 0x0b, 0xba];
+// pub const CLIENT_MAC: [u8; 6] = [0x00, 0x50, 0x56, 0x3e, 0xa4, 0xf6];
 
 pub enum L4Hdr {
     TcpHdr(*mut TcpHdr),
@@ -140,8 +144,11 @@ pub fn csum_fold_helper(csum: u64) -> u16 {
     !csum as u16
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub const fn build_ip_u32(a: i32, b: i32, c: i32, d: i32) -> u32 {
+    ((a as u32) << 24) | ((b as u32) << 16) | ((c as u32) << 8) | (d as u32)
+}
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KEndpoint(u64);
 
 impl KEndpoint {
@@ -196,7 +203,6 @@ impl Into<[u8; 6]> for Mac {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-
 pub struct Notification {
     pub connection: KConnection,
     pub event: Event,
@@ -225,7 +231,6 @@ pub fn packet_notification(connection: KConnection, tcphdr: *const TcpHdr) -> No
 }
 
 mod test {
-
     #[test]
     fn test_mac_from_into() {
         use crate::Mac;

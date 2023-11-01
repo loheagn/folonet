@@ -130,7 +130,7 @@ fn update_packet_by_way(
         (*iphdr).dst_addr = dst.ip();
     };
 
-    // udpate src ip
+    // update src ip
     update_csum(
         &ctx,
         iphdr,
@@ -156,7 +156,7 @@ fn update_packet_by_way(
     l4_hdr.set_bi_port(&bi_port);
 
     // set mac
-    let src_mac: Mac = unsafe { (*ethhdr).src_addr }.into();
+    let src_mac: Mac = unsafe { (*ethhdr).dst_addr }.into();
     let src_mac: [u8; 6] = src_mac.into();
     let src_mac_ptr: *mut [u8; 6] =
         ((ethhdr as usize) + offset_of!(EthHdr, src_addr)) as *mut [u8; 6];
