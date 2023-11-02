@@ -63,6 +63,18 @@ impl Packet {
             seq: u32::from_be(tcphdr.seq),
         }
     }
+
+    pub fn is_syn(&self) -> bool {
+        return self.flag.contains(PacketFlag::SYN);
+    }
+
+    pub fn is_fin(&self) -> bool {
+        return self.flag.contains(PacketFlag::FIN);
+    }
+
+    pub fn is_ack(&self) -> bool {
+        return self.flag.contains(PacketFlag::ACK);
+    }
 }
 
 bitflags! {

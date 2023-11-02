@@ -20,7 +20,7 @@ use tokio::runtime::Runtime;
 use tokio::signal;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::endpoint::{endpoint_pair_from_notification, Endpoint};
+use crate::endpoint::{endpoint_pair_from_notification, Endpoint, UEndpoint};
 use crate::event::EndpointState;
 
 mod endpoint;
@@ -74,13 +74,13 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     // init maps
-    let local_left_endpoint = Endpoint::new(KEndpoint::new(LOCAL_IP.to_be(), 80u16.to_be()));
-    let server_endpoint = Endpoint::new(KEndpoint::new(SERVER_IP.to_be(), 80u16.to_be()));
-    let mut server_map: AyaHashmap<_, Endpoint, Endpoint> =
+    let local_left_endpoint = UEndpoint::new(KEndpoint::new(LOCAL_IP.to_be(), 80u16.to_be()));
+    let server_endpoint = UEndpoint::new(KEndpoint::new(SERVER_IP.to_be(), 80u16.to_be()));
+    let mut server_map: AyaHashmap<_, UEndpoint, UEndpoint> =
         AyaHashmap::try_from(bpf.map_mut("SERVER_MAP").unwrap()).unwrap();
     server_map.insert(&local_left_endpoint, &server_endpoint, 0)?;
 
-    let mut server_port: AyaHashmap<_, Endpoint, u8> =
+    let mut server_port: AyaHashmap<_, UEndpoint, u8> =
         AyaHashmap::try_from(bpf.map_mut("SERVER_PORT_MAP").unwrap())?;
     server_port.insert(&local_left_endpoint, 1, 0)?;
 
@@ -119,13 +119,20 @@ async fn main() -> Result<(), anyhow::Error> {
                     let (from_endpoint, to_endpoint) =
                         endpoint_pair_from_notification(&notification);
 
+                    info!(
+                        "from {} to {}",
+                        from_endpoint.to_string(),
+                        to_endpoint.to_string()
+                    );
+
                     endpoint_state_handle_notification(
                         endpoint_state_map.clone(),
                         from_endpoint,
                         notification,
                         notification.is_tcp(),
                         Direction::From,
-                    );
+                    )
+                    .await;
 
                     endpoint_state_handle_notification(
                         endpoint_state_map.clone(),
@@ -133,7 +140,8 @@ async fn main() -> Result<(), anyhow::Error> {
                         notification,
                         notification.is_tcp(),
                         Direction::To,
-                    );
+                    )
+                    .await;
                 }
             }
         });
@@ -148,25 +156,25 @@ async fn main() -> Result<(), anyhow::Error> {
 
 type GlobalStateMap = Arc<TokioMutex<HashMap<Endpoint, Arc<TokioMutex<EndpointState>>>>>;
 
-fn endpoint_state_handle_notification(
+async fn endpoint_state_handle_notification(
     state_map: GlobalStateMap,
     e: Endpoint,
     notification: Notification,
     is_tcp: bool,
     direction: Direction,
 ) {
-    tokio::spawn(async move {
-        let mut state_map_guard = state_map.lock().await;
-        let state = state_map_guard
-            .entry(e.clone())
-            .or_insert_with(|| Arc::new(TokioMutex::new(EndpointState::new(is_tcp))))
-            .clone();
-        drop(state_map_guard);
+    // tokio::spawn(async move {
+    let mut state_map_guard = state_map.lock().await;
+    let state = state_map_guard
+        .entry(e.clone())
+        .or_insert_with(|| Arc::new(TokioMutex::new(EndpointState::new(&e, is_tcp))))
+        .clone();
+    drop(state_map_guard);
 
-        let mut state = state.lock().await;
-        state
-            .handle_notification(notification, direction)
-            .await
-            .unwrap();
-    });
+    let mut state = state.lock().await;
+    state
+        .handle_notification(notification, direction)
+        .await
+        .unwrap();
+    // });
 }

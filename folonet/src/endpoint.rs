@@ -1,26 +1,45 @@
 use std::net::Ipv4Addr;
 
 use aya::Pod;
-use folonet_common::{KConnection, KEndpoint, Notification};
+use folonet_common::{KConnection, KEndpoint, Notification, SERVER_IP};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Endpoint(KEndpoint);
+pub struct UEndpoint(KEndpoint);
 
-unsafe impl Pod for Endpoint {}
+impl UEndpoint {
+    pub fn new(e: KEndpoint) -> Self {
+        UEndpoint(e)
+    }
+}
+
+unsafe impl Pod for UEndpoint {}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Endpoint {
+    pub ip: Ipv4Addr,
+    pub port: u16,
+}
 
 impl Endpoint {
-    pub fn ip(&self) -> Ipv4Addr {
-        u32::from_be(self.0.ip()).into()
-    }
+    pub fn is_server_side(&self) -> bool {
+        let ip = u32::from(self.ip);
 
-    pub fn port(&self) -> u16 {
-        u16::from_be(self.0.port())
+        ip == SERVER_IP
+    }
+}
+
+impl ToString for Endpoint {
+    fn to_string(&self) -> String {
+        format!("{}:{}", self.ip, self.port)
     }
 }
 
 impl Endpoint {
     pub fn new(endpoint: KEndpoint) -> Self {
-        Endpoint(endpoint)
+        Endpoint {
+            ip: u32::from_be(endpoint.ip()).into(),
+            port: u16::from_be(endpoint.port()),
+        }
     }
 }
 

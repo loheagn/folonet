@@ -7,7 +7,7 @@ state_machine! {
 
     Closed => {
         PassiveOpen => Listen,
-        ActiveOpenSnedSyn => SynSent,
+        SendSyn => SynSent,
     },
 
     Listen(ReceiveSyn) => ListenReceiveSyn,
@@ -38,7 +38,7 @@ state_machine! {
     FinWait1ReceiveFin(SendAckForFin) => Closing,
 
     FinWait2(ReceiveFin) =>  FinWait2ReceiveFin,
-    FinWait2ReceiveFin(SendAckForFin) => Closing,
+    FinWait2ReceiveFin(SendAckForFin) => TimeWait,
 
     Closing(RecvAckForFin) => TimeWait,
 
