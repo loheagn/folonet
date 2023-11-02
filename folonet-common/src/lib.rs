@@ -105,7 +105,7 @@ impl Into<u32> for BiPort {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KConnection {
     pub from: KEndpoint,
     pub to: KEndpoint,
@@ -202,7 +202,7 @@ impl Into<[u8; 6]> for Mac {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Notification {
     pub connection: KConnection,
     pub event: Event,

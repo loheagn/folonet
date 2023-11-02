@@ -9,11 +9,22 @@ use folonet_common::{
     event::{Event, Packet},
     Notification,
 };
-use log::info;
+use log::debug;
 use rust_fsm::StateMachine;
+use std::result::Result::Ok as StdOk;
+use tokio::{sync::broadcast, task::JoinHandle};
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct NotificationMessage {
+    pub notification: Notification,
+    pub direction: Direction,
+}
 
 pub struct EndpointState {
     tcp: Option<TcpFsmState>,
+    e: Endpoint,
+    pub notification_sender: Option<broadcast::Sender<NotificationMessage>>,
+    loop_handle: Option<JoinHandle<()>>,
 }
 
 pub struct TcpFsmState {
@@ -23,6 +34,7 @@ pub struct TcpFsmState {
     sent_special_packet: Option<SpecialPacket>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Direction {
     From,
     To,
@@ -75,7 +87,40 @@ impl EndpointState {
         } else {
             None
         };
-        EndpointState { tcp }
+
+        EndpointState {
+            tcp,
+            e: e.clone(),
+            notification_sender: None,
+            loop_handle: None,
+        }
+    }
+
+    fn is_tcp(&self) -> bool {
+        self.tcp.is_some()
+    }
+
+    pub fn init(&mut self) {
+        let e = self.e.clone();
+
+        let (tx, mut rx) = broadcast::channel::<NotificationMessage>(10240);
+
+        let is_tcp = self.is_tcp();
+
+        let handle = tokio::spawn(async move {
+            let mut endpoint_state = EndpointState::new(&e, is_tcp);
+
+            loop {
+                if let StdOk(msg) = rx.recv().await {
+                    let _ = endpoint_state
+                        .handle_notification(msg.notification, msg.direction)
+                        .await;
+                }
+            }
+        });
+
+        self.loop_handle.replace(handle);
+        self.notification_sender.replace(tx);
     }
 }
 
@@ -87,8 +132,10 @@ impl TcpFsmState {
     ) -> Result<(), anyhow::Error> {
         self.check_input(&packet, &direction).iter().for_each(|e| {
             let old_state = self.fsm.state().clone();
+
             let _ = self.fsm.consume(e);
-            info!(
+
+            debug!(
                 "{} input: {:?}, from {:?} to {:?}",
                 self.e.to_string(),
                 e,
@@ -118,13 +165,13 @@ impl TcpFsmState {
         }
 
         if self.fsm.state() == &TCPState::TimeWait {
-            info!("{} into time wait.", self.e.to_string());
+            debug!("{} into time wait.", self.e.to_string());
             tokio::time::sleep(Duration::from_secs(60)).await;
             let _ = self.fsm.consume(&TCPInput::TimeExpired);
         }
 
         if self.fsm.state() == &TCPState::Closed {
-            info!("{} closed.", self.e.to_string());
+            debug!("{} closed.", self.e.to_string());
         }
 
         Ok(())

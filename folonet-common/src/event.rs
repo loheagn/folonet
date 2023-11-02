@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 use network_types::tcp::TcpHdr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 
 pub enum Event {
     Packet(Packet),
@@ -38,7 +38,7 @@ impl From<u128> for Event {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Packet {
     pub flag: PacketFlag,
     pub ack_seq: u32,
@@ -78,7 +78,7 @@ impl Packet {
 }
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct PacketFlag: u32 {
          const SYN = 0b0000_0001;
          const FIN = 0b0000_0010;

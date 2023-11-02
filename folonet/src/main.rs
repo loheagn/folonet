@@ -13,15 +13,16 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
 use std::os::fd::AsRawFd;
-use std::sync::{Arc, Mutex};
+use std::result::Result::Ok as StdOk;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tokio::runtime::Runtime;
 use tokio::signal;
-use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::{broadcast, oneshot, Mutex as TokioMutex};
 
 use crate::endpoint::{endpoint_pair_from_notification, Endpoint, UEndpoint};
-use crate::event::EndpointState;
+use crate::event::{EndpointState, NotificationMessage};
 
 mod endpoint;
 mod event;
@@ -106,11 +107,27 @@ async fn main() -> Result<(), anyhow::Error> {
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let endpoint_state_map: GlobalStateMap = Arc::new(TokioMutex::new(HashMap::new()));
-
             let mut ring_buf: RingBuf<&mut aya::maps::MapData> =
                 RingBuf::try_from(bpf.map_mut("PACKET_EVENT").unwrap()).unwrap();
             let fd = AsyncFd::new(ring_buf.as_raw_fd()).unwrap();
+
+            let mut new_state_map = HashMap::<Endpoint, EndpointState>::new();
+            let mut notifiy_endpoint =
+                |notification: Notification, e: Endpoint, direction: Direction| {
+                    let state = new_state_map.entry(e.clone()).or_insert_with(move || {
+                        let mut state = EndpointState::new(&e, notification.is_tcp());
+                        state.init();
+                        state
+                    });
+
+                    if let Some(tx) = &state.notification_sender {
+                        let _ = tx.send(NotificationMessage {
+                            notification,
+                            direction,
+                        });
+                    }
+                };
+
             loop {
                 let _ = fd.readable().await.unwrap();
 
@@ -118,30 +135,14 @@ async fn main() -> Result<(), anyhow::Error> {
                     let notification = Notification::from_bytes(item.deref());
                     let (from_endpoint, to_endpoint) =
                         endpoint_pair_from_notification(&notification);
-
-                    info!(
+                    debug!(
                         "from {} to {}",
                         from_endpoint.to_string(),
                         to_endpoint.to_string()
                     );
 
-                    endpoint_state_handle_notification(
-                        endpoint_state_map.clone(),
-                        from_endpoint,
-                        notification,
-                        notification.is_tcp(),
-                        Direction::From,
-                    )
-                    .await;
-
-                    endpoint_state_handle_notification(
-                        endpoint_state_map.clone(),
-                        to_endpoint,
-                        notification,
-                        notification.is_tcp(),
-                        Direction::To,
-                    )
-                    .await;
+                    notifiy_endpoint(notification, from_endpoint, Direction::From);
+                    notifiy_endpoint(notification, to_endpoint, Direction::To);
                 }
             }
         });
@@ -152,29 +153,4 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Exiting...");
 
     Ok(())
-}
-
-type GlobalStateMap = Arc<TokioMutex<HashMap<Endpoint, Arc<TokioMutex<EndpointState>>>>>;
-
-async fn endpoint_state_handle_notification(
-    state_map: GlobalStateMap,
-    e: Endpoint,
-    notification: Notification,
-    is_tcp: bool,
-    direction: Direction,
-) {
-    // tokio::spawn(async move {
-    let mut state_map_guard = state_map.lock().await;
-    let state = state_map_guard
-        .entry(e.clone())
-        .or_insert_with(|| Arc::new(TokioMutex::new(EndpointState::new(&e, is_tcp))))
-        .clone();
-    drop(state_map_guard);
-
-    let mut state = state.lock().await;
-    state
-        .handle_notification(notification, direction)
-        .await
-        .unwrap();
-    // });
 }
