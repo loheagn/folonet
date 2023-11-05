@@ -1,10 +1,9 @@
 use anyhow::{Context, Ok};
-use aya::maps::{HashMap as AyaHashmap, RingBuf};
+use aya::maps::{HashMap as AyaHashmap, MapData as AyaMapData, RingBuf};
 use aya::programs::{Xdp, XdpFlags};
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
 use clap::Parser;
-use event::Direction;
 use folonet_common::{
     KEndpoint, Mac, Notification, CLIENT_IP, CLIENT_MAC, LOCAL_IP, SERVER_IP, SERVER_MAC,
 };
@@ -13,20 +12,21 @@ use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
 use std::os::fd::AsRawFd;
-use std::result::Result::Ok as StdOk;
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 use tokio::runtime::Runtime;
 use tokio::signal;
-use tokio::sync::{broadcast, oneshot, Mutex as TokioMutex};
 
-use crate::endpoint::{endpoint_pair_from_notification, Endpoint, UEndpoint};
-use crate::event::{EndpointState, NotificationMessage};
+use crate::endpoint::{
+    endpoint_pair_from_notification, Connection, Endpoint, UConnection, UEndpoint,
+};
+use crate::service::{Message, Service};
+use crate::worker::MsgWorker;
 
 mod endpoint;
-mod event;
-mod tcp_fsm;
+mod service;
+mod state;
+mod worker;
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -104,30 +104,41 @@ async fn main() -> Result<(), anyhow::Error> {
                 .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE").unwrap();
     });
 
+    let mut bpf_packet_event_map = bpf.take_map("PACKET_EVENT").unwrap();
+    let mut bpf_connection_map = bpf.take_map("CONNECTION").unwrap();
+
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
+            let bpf_connection_map: AyaHashmap<AyaMapData, UConnection, UConnection> =
+                AyaHashmap::try_from(bpf_connection_map).unwrap();
+            let connection_map = Arc::new(tokio::sync::Mutex::new(bpf_connection_map));
+
+            let mut tcp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
+            let mut udp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
+
+            // FIXME: fill the service maps
+            let local_endpoint = Endpoint {
+                ip: Ipv4Addr::from(LOCAL_IP),
+                port: 80,
+            };
+            tcp_service_map.insert(
+                local_endpoint.clone(),
+                MsgWorker::new(Service::new(
+                    "test".to_string(),
+                    local_endpoint,
+                    vec![Endpoint {
+                        ip: Ipv4Addr::from(SERVER_IP),
+                        port: 80,
+                    }],
+                    true,
+                    connection_map.clone(),
+                )),
+            );
+
             let mut ring_buf: RingBuf<&mut aya::maps::MapData> =
-                RingBuf::try_from(bpf.map_mut("PACKET_EVENT").unwrap()).unwrap();
+                RingBuf::try_from(&mut bpf_packet_event_map).unwrap();
             let fd = AsyncFd::new(ring_buf.as_raw_fd()).unwrap();
-
-            let mut new_state_map = HashMap::<Endpoint, EndpointState>::new();
-            let mut notifiy_endpoint =
-                |notification: Notification, e: Endpoint, direction: Direction| {
-                    let state = new_state_map.entry(e.clone()).or_insert_with(move || {
-                        let mut state = EndpointState::new(&e, notification.is_tcp());
-                        state.init();
-                        state
-                    });
-
-                    if let Some(tx) = &state.notification_sender {
-                        let _ = tx.send(NotificationMessage {
-                            notification,
-                            direction,
-                        });
-                    }
-                };
-
             loop {
                 let _ = fd.readable().await.unwrap();
 
@@ -135,14 +146,41 @@ async fn main() -> Result<(), anyhow::Error> {
                     let notification = Notification::from_bytes(item.deref());
                     let (from_endpoint, to_endpoint) =
                         endpoint_pair_from_notification(&notification);
-                    debug!(
+                    let local_endpoint = Endpoint::new(notification.local_endpoint);
+                    let local_out_endpoint = Endpoint::new(notification.lcoal_out_endpoint);
+
+                    info!(
                         "from {} to {}",
                         from_endpoint.to_string(),
                         to_endpoint.to_string()
                     );
 
-                    notifiy_endpoint(notification, from_endpoint, Direction::From);
-                    notifiy_endpoint(notification, to_endpoint, Direction::To);
+                    info!(
+                        "local_in_endpoint {} lcoal_out_endpoint {}",
+                        local_endpoint.to_string(),
+                        local_out_endpoint.to_string(),
+                    );
+
+                    let service = if notification.is_tcp() {
+                        tcp_service_map
+                            .get(&local_endpoint)
+                            .or_else(|| tcp_service_map.get(&local_out_endpoint))
+                    } else {
+                        udp_service_map
+                            .get(&local_endpoint)
+                            .or_else(|| udp_service_map.get(&local_out_endpoint))
+                    };
+
+                    if let Some(service) = service {
+                        info!("in here");
+                        if let Some(sender) = service.msg_sender() {
+                            info!("in here again");
+                            let result = sender.send(Message::new(notification)).await;
+                            if result.is_err() {
+                                info!("error {:?}", result.err().unwrap());
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -153,4 +191,19 @@ async fn main() -> Result<(), anyhow::Error> {
     info!("Exiting...");
 
     Ok(())
+}
+
+mod test {
+
+    #[test]
+    fn map_test() {
+        use std::collections::HashMap;
+        let mut map: HashMap<i32, i32> = HashMap::new();
+
+        map.insert(4, 5);
+
+        let v = map.get(&3).or_else(|| map.get(&4)).unwrap();
+
+        assert_eq!(*v, 5);
+    }
 }

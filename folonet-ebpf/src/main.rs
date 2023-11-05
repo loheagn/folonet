@@ -258,6 +258,8 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
     if let Some(tcphdr) = l4_hdr.inner_tcp_ptr() {
         if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
             let notification = Notification {
+                local_endpoint: declare_way.to,
+                lcoal_out_endpoint: output_way.from,
                 connection: KConnection {
                     from: declare_way.from,
                     to: output_way.to,

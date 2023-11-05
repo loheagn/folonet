@@ -204,6 +204,8 @@ impl Into<[u8; 6]> for Mac {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Notification {
+    pub local_endpoint: KEndpoint,
+    pub lcoal_out_endpoint: KEndpoint,
     pub connection: KConnection,
     pub event: Event,
 }
@@ -218,15 +220,8 @@ impl Notification {
     pub fn is_tcp(&self) -> bool {
         match self.event {
             Event::Packet(_) => true,
+            Event::Udp => false,
         }
-    }
-}
-
-#[inline(always)]
-pub fn packet_notification(connection: KConnection, tcphdr: *const TcpHdr) -> Notification {
-    Notification {
-        connection,
-        event: Event::new_packet_event(tcphdr),
     }
 }
 
@@ -299,6 +294,8 @@ mod test {
         };
 
         let notification = Notification {
+            local_endpoint: endpoint,
+            lcoal_out_endpoint: endpoint,
             connection,
             event: Event::Packet(packet),
         };

@@ -5,12 +5,14 @@ use network_types::tcp::TcpHdr;
 
 pub enum Event {
     Packet(Packet),
+    Udp,
 }
 
 impl Event {
     pub fn type_id(&self) -> u8 {
         match self {
             Event::Packet(_) => 1,
+            Event::Udp => 2,
         }
     }
 
@@ -24,6 +26,7 @@ impl From<&Event> for u128 {
     fn from(e: &Event) -> u128 {
         match e {
             Event::Packet(ref p) => (e.type_id() as u128) << 120 | u128::from(p),
+            Event::Udp => 0,
         }
     }
 }
