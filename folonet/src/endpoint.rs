@@ -2,7 +2,6 @@ use std::{hash::Hash, net::Ipv4Addr};
 
 use aya::Pod;
 use folonet_common::{KConnection, KEndpoint, Notification, SERVER_IP};
-use log::info;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct UEndpoint(KEndpoint);
@@ -10,10 +9,6 @@ pub struct UEndpoint(KEndpoint);
 impl UEndpoint {
     pub fn new(e: KEndpoint) -> Self {
         UEndpoint(e)
-    }
-
-    pub fn to_k_endpoint(&self) -> KEndpoint {
-        self.0
     }
 }
 

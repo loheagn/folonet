@@ -1,18 +1,16 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::Ok;
-use async_trait::async_trait;
 use folonet_common::event::{Event, Packet};
 use log::{debug, info};
 use rust_fsm::*;
-use tokio::sync::mpsc;
 
 use crate::{
     endpoint::{Connection, Direction, Endpoint},
     worker::{MsgHandler, MsgWorker},
 };
 
-use super::PacketMsg;
+use super::{PacketHandler, PacketMsg};
 
 state_machine! {
     derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)
@@ -63,33 +61,9 @@ pub enum SpecialPacket {
     SYN(u32),
     FIN(u32),
 }
-
-pub struct TcpStateManager {
-    state_map: HashMap<Connection, MsgWorker<ConnectionState>>,
-}
-
-impl TcpStateManager {
-    pub fn new() -> Self {
-        TcpStateManager {
-            state_map: HashMap::new(),
-        }
-    }
-
-    pub async fn handle_packet_msg(&mut self, msg: PacketMsg) {
-        let connection_state = self
-            .state_map
-            .entry(msg.connection())
-            .or_insert_with(|| MsgWorker::new(ConnectionState::new(&msg.from, &msg.to)));
-        if let Some(sender) = connection_state.msg_sender() {
-            let _ = sender.send(msg).await;
-        }
-    }
-}
-
 pub struct ConnectionState {
     client: TcpFsmState,
     server: TcpFsmState,
-    pub notification_sender: Option<mpsc::Sender<PacketMsg>>,
 }
 
 impl ConnectionState {
@@ -97,12 +71,26 @@ impl ConnectionState {
         ConnectionState {
             client: TcpFsmState::new(from),
             server: TcpFsmState::new(to),
-            notification_sender: None,
         }
     }
 }
 
-#[async_trait]
+pub type TcpConnState = MsgWorker<ConnectionState>;
+
+impl PacketHandler for TcpConnState {
+    async fn handle_packet(&mut self, packet: PacketMsg) {
+        if let Some(sender) = self.msg_sender() {
+            let _ = sender.send(packet).await;
+        }
+    }
+}
+
+impl TcpConnState {
+    pub fn from_connection(conn: &Connection) -> Self {
+        TcpConnState::new(ConnectionState::new(&conn.from, &conn.to))
+    }
+}
+
 impl MsgHandler for ConnectionState {
     type MsgType = PacketMsg;
 

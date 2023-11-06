@@ -1,13 +1,15 @@
-use super::PacketMsg;
+use super::{PacketHandler, PacketMsg};
 
-pub struct UdpStateManager {}
+pub struct UdpConnState {}
 
-impl UdpStateManager {
+impl UdpConnState {
     pub fn new() -> Self {
         todo!()
     }
+}
 
-    pub async fn handle_packet_msg(&mut self, _msg: PacketMsg) {
+impl PacketHandler for UdpConnState {
+    async fn handle_packet(&mut self, _packet: PacketMsg) {
         todo!()
     }
 }

@@ -7,21 +7,21 @@ use crate::L4Hdr;
 
 pub enum Event {
     TcpPacket(Packet),
-    UdpPacket,
+    UdpPacket(Packet),
 }
 
 impl Event {
     pub fn type_id(&self) -> u8 {
         match self {
             Event::TcpPacket(_) => 1,
-            Event::UdpPacket => 2,
+            Event::UdpPacket(_) => 2,
         }
     }
 
     pub fn new_packet_event(hdr: &L4Hdr) -> Self {
         match hdr {
             L4Hdr::TcpHdr(tcphdr) => Event::TcpPacket(Packet::new(&unsafe { **tcphdr })),
-            L4Hdr::UdpHdr(_) => Event::UdpPacket,
+            L4Hdr::UdpHdr(_) => Event::UdpPacket(Packet::default()),
         }
     }
 }
@@ -30,7 +30,7 @@ impl From<&Event> for u128 {
     fn from(e: &Event) -> u128 {
         match e {
             Event::TcpPacket(ref p) => (e.type_id() as u128) << 120 | u128::from(p),
-            Event::UdpPacket => 0,
+            Event::UdpPacket(_) => 0,
         }
     }
 }

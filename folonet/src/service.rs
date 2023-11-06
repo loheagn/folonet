@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use aya::maps::{HashMap as AyaHashMap, MapData as AyaMapData};
 use folonet_common::{event::Event, Notification};
 use std::{
@@ -8,7 +7,7 @@ use std::{
 
 use crate::{
     endpoint::{Connection, Endpoint, UConnection},
-    state::{ConnectionStateManager, PacketMsg},
+    state::{ConnectionStateMgr, PacketMsg},
     worker::MsgHandler,
 };
 
@@ -39,19 +38,18 @@ pub struct Service {
     pub active: AtomicBool,
     pub client_connection_map: HashMap<Endpoint, Endpoint>,
     pub server_connection_map: HashMap<Endpoint, Endpoint>,
-    pub state_mgr: ConnectionStateManager,
+    pub state_mgr: ConnectionStateMgr,
 
     pub connection_map: BpfConnectionMap, // reference the bpf map
 }
 
-#[async_trait]
 impl MsgHandler for Service {
     type MsgType = Message;
 
     async fn handle_message(&mut self, msg: Self::MsgType) {
         let notification = msg.0;
         match notification.event {
-            Event::TcpPacket(_) | Event::UdpPacket => {
+            Event::TcpPacket(_) | Event::UdpPacket(_) => {
                 let msg = PacketMsg::new(msg.connection(), notification.event);
                 self.state_mgr.handle_packet_msg(msg).await;
             }
@@ -67,7 +65,7 @@ impl Service {
         is_tcp: bool,
         connection_map: BpfConnectionMap,
     ) -> Self {
-        let state_mgr = ConnectionStateManager::new(is_tcp);
+        let state_mgr = ConnectionStateMgr::new(is_tcp);
         let service = Service {
             name,
             local_endpoint,

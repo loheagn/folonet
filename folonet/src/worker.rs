@@ -1,16 +1,16 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use log::warn;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
-#[async_trait]
 pub trait MsgHandler: Send + Sync + 'static {
     type MsgType: Send + Sync + 'static + Debug;
 
-    async fn handle_message(&mut self, msg: Self::MsgType);
+    fn handle_message(
+        &mut self,
+        msg: Self::MsgType,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 
 pub struct MsgWorker<T>

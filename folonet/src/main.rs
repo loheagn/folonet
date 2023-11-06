@@ -103,7 +103,7 @@ async fn main() -> Result<(), anyhow::Error> {
     });
 
     let mut bpf_packet_event_map = bpf.take_map("PACKET_EVENT").unwrap();
-    let mut bpf_connection_map = bpf.take_map("CONNECTION").unwrap();
+    let bpf_connection_map = bpf.take_map("CONNECTION").unwrap();
 
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();

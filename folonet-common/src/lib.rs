@@ -220,7 +220,7 @@ impl Notification {
     pub fn is_tcp(&self) -> bool {
         match self.event {
             Event::TcpPacket(_) => true,
-            Event::UdpPacket => false,
+            Event::UdpPacket(_) => false,
         }
     }
 }
