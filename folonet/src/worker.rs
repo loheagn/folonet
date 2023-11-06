@@ -6,8 +6,6 @@ use log::warn;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
-use crate::state::PacketMsg;
-
 #[async_trait]
 pub trait MsgHandler: Send + Sync + 'static {
     type MsgType: Send + Sync + 'static + Debug;

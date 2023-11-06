@@ -2,9 +2,9 @@ use folonet_common::event::Event;
 
 use crate::endpoint::{Connection, Direction, Endpoint};
 
-use self::{tcp_fsm::TcpStateManager, udp::UdpStateManager};
+use self::{tcp::TcpStateManager, udp::UdpStateManager};
 
-pub mod tcp_fsm;
+pub mod tcp;
 pub mod udp;
 
 pub enum ConnectionStateManager {
