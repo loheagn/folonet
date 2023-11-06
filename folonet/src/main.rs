@@ -7,7 +7,7 @@ use clap::Parser;
 use folonet_common::{
     KEndpoint, Mac, Notification, CLIENT_IP, CLIENT_MAC, LOCAL_IP, SERVER_IP, SERVER_MAC,
 };
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
@@ -17,9 +17,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::runtime::Runtime;
 use tokio::signal;
 
-use crate::endpoint::{
-    endpoint_pair_from_notification, Connection, Endpoint, UConnection, UEndpoint,
-};
+use crate::endpoint::{endpoint_pair_from_notification, Endpoint, UConnection, UEndpoint};
 use crate::service::{Message, Service};
 use crate::worker::MsgWorker;
 
@@ -146,7 +144,7 @@ async fn main() -> Result<(), anyhow::Error> {
                     let notification = Notification::from_bytes(item.deref());
                     let (from_endpoint, to_endpoint) =
                         endpoint_pair_from_notification(&notification);
-                    let local_endpoint = Endpoint::new(notification.local_endpoint);
+                    let local_in_endpoint = Endpoint::new(notification.local_in_endpoint);
                     let local_out_endpoint = Endpoint::new(notification.lcoal_out_endpoint);
 
                     info!(
@@ -157,27 +155,30 @@ async fn main() -> Result<(), anyhow::Error> {
 
                     info!(
                         "local_in_endpoint {} lcoal_out_endpoint {}",
-                        local_endpoint.to_string(),
+                        local_in_endpoint.to_string(),
                         local_out_endpoint.to_string(),
                     );
 
                     let service = if notification.is_tcp() {
                         tcp_service_map
-                            .get(&local_endpoint)
+                            .get(&local_in_endpoint)
                             .or_else(|| tcp_service_map.get(&local_out_endpoint))
                     } else {
                         udp_service_map
-                            .get(&local_endpoint)
+                            .get(&local_in_endpoint)
                             .or_else(|| udp_service_map.get(&local_out_endpoint))
                     };
 
                     if let Some(service) = service {
-                        info!("in here");
                         if let Some(sender) = service.msg_sender() {
-                            info!("in here again");
-                            let result = sender.send(Message::new(notification)).await;
+                            let msg = Message::new(notification);
+                            let result = sender.send(msg.clone()).await;
                             if result.is_err() {
-                                info!("error {:?}", result.err().unwrap());
+                                error!(
+                                    "failed to send message {:?}, error detail: {:?}",
+                                    msg,
+                                    result.err().unwrap(),
+                                );
                             }
                         }
                     }

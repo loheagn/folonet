@@ -204,7 +204,7 @@ impl Into<[u8; 6]> for Mac {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Notification {
-    pub local_endpoint: KEndpoint,
+    pub local_in_endpoint: KEndpoint,
     pub lcoal_out_endpoint: KEndpoint,
     pub connection: KConnection,
     pub event: Event,
@@ -219,8 +219,8 @@ impl Notification {
 
     pub fn is_tcp(&self) -> bool {
         match self.event {
-            Event::Packet(_) => true,
-            Event::Udp => false,
+            Event::TcpPacket(_) => true,
+            Event::UdpPacket => false,
         }
     }
 }
@@ -294,10 +294,10 @@ mod test {
         };
 
         let notification = Notification {
-            local_endpoint: endpoint,
+            local_in_endpoint: endpoint,
             lcoal_out_endpoint: endpoint,
             connection,
-            event: Event::Packet(packet),
+            event: Event::TcpPacket(packet),
         };
 
         let p = &notification as *const Notification;

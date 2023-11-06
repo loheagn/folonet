@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use aya::maps::{HashMap as AyaHashMap, MapData as AyaMapData};
 use folonet_common::{event::Event, Notification};
-use log::warn;
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicBool, Arc},
@@ -13,7 +12,7 @@ use crate::{
     worker::MsgHandler,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message(Notification);
 
 impl Message {
@@ -52,7 +51,7 @@ impl MsgHandler for Service {
     async fn handle_message(&mut self, msg: Self::MsgType) {
         let notification = msg.0;
         match notification.event {
-            Event::Packet(_) | Event::Udp => {
+            Event::TcpPacket(_) | Event::UdpPacket => {
                 let msg = PacketMsg::new(msg.connection(), notification.event);
                 self.state_mgr.handle_packet_msg(msg).await;
             }

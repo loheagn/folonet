@@ -1,6 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use async_trait::async_trait;
 use folonet_common::event::Event;
 
 use crate::endpoint::{Connection, Direction, Endpoint};

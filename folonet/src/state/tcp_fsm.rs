@@ -1,12 +1,9 @@
-use std::{
-    collections::HashMap,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Ok;
 use async_trait::async_trait;
 use folonet_common::event::{Event, Packet};
-use log::{debug, info, warn};
+use log::{debug, info};
 use rust_fsm::*;
 use tokio::sync::mpsc;
 
@@ -79,10 +76,10 @@ impl TcpStateManager {
     }
 
     pub async fn handle_packet_msg(&mut self, msg: PacketMsg) {
-        let connection_state = self.state_map.entry(msg.connection()).or_insert_with(|| {
-            info!("create new one loheagn, {:?}", msg.connection());
-            MsgWorker::new(ConnectionState::new(&msg.from, &msg.to))
-        });
+        let connection_state = self
+            .state_map
+            .entry(msg.connection())
+            .or_insert_with(|| MsgWorker::new(ConnectionState::new(&msg.from, &msg.to)));
         if let Some(sender) = connection_state.msg_sender() {
             let _ = sender.send(msg).await;
         }
@@ -110,9 +107,8 @@ impl MsgHandler for ConnectionState {
     type MsgType = PacketMsg;
 
     async fn handle_message(&mut self, msg: Self::MsgType) {
-        info!("connection state handles msg: {:?}", msg);
         match msg.event {
-            Event::Packet(_) => {
+            Event::TcpPacket(_) => {
                 let _ = self.client.handle_packet_event(&msg).await;
                 let _ = self.server.handle_packet_event(&msg).await;
             }
@@ -144,7 +140,7 @@ impl TcpFsmState {
 
     pub async fn handle_packet_event(&mut self, msg: &PacketMsg) -> Result<(), anyhow::Error> {
         let packet = match msg.event {
-            Event::Packet(p) => Some(p),
+            Event::TcpPacket(p) => Some(p),
             _ => None,
         };
 

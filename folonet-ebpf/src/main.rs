@@ -254,21 +254,19 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
 
     debug_connection(&ctx, &output_way, "output:")?;
 
-    // if is tcp connection, notify to userspace
-    if let Some(tcphdr) = l4_hdr.inner_tcp_ptr() {
-        if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
-            let notification = Notification {
-                local_endpoint: declare_way.to,
-                lcoal_out_endpoint: output_way.from,
-                connection: KConnection {
-                    from: declare_way.from,
-                    to: output_way.to,
-                },
-                event: Event::new_packet_event(tcphdr),
-            };
-            e.write(notification);
-            e.submit(0);
-        }
+    // notify to userspace
+    if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
+        let notification = Notification {
+            local_in_endpoint: declare_way.to,
+            lcoal_out_endpoint: output_way.from,
+            connection: KConnection {
+                from: declare_way.from,
+                to: output_way.to,
+            },
+            event: Event::new_packet_event(&l4_hdr),
+        };
+        e.write(notification);
+        e.submit(0);
     }
 
     update_packet_by_way(&ctx, ethhdr, iphdr, &mut l4_hdr, &output_way)?;

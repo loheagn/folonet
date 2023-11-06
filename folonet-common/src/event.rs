@@ -1,32 +1,36 @@
 use bitflags::bitflags;
 use network_types::tcp::TcpHdr;
 
+use crate::L4Hdr;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 
 pub enum Event {
-    Packet(Packet),
-    Udp,
+    TcpPacket(Packet),
+    UdpPacket,
 }
 
 impl Event {
     pub fn type_id(&self) -> u8 {
         match self {
-            Event::Packet(_) => 1,
-            Event::Udp => 2,
+            Event::TcpPacket(_) => 1,
+            Event::UdpPacket => 2,
         }
     }
 
-    pub fn new_packet_event(tcphdr: *const TcpHdr) -> Self {
-        let packet = Packet::new(&unsafe { *tcphdr });
-        Event::Packet(packet)
+    pub fn new_packet_event(hdr: &L4Hdr) -> Self {
+        match hdr {
+            L4Hdr::TcpHdr(tcphdr) => Event::TcpPacket(Packet::new(&unsafe { **tcphdr })),
+            L4Hdr::UdpHdr(_) => Event::UdpPacket,
+        }
     }
 }
 
 impl From<&Event> for u128 {
     fn from(e: &Event) -> u128 {
         match e {
-            Event::Packet(ref p) => (e.type_id() as u128) << 120 | u128::from(p),
-            Event::Udp => 0,
+            Event::TcpPacket(ref p) => (e.type_id() as u128) << 120 | u128::from(p),
+            Event::UdpPacket => 0,
         }
     }
 }
@@ -35,7 +39,7 @@ impl From<u128> for Event {
     fn from(v: u128) -> Self {
         let type_id = (v >> 120) as u8;
         match type_id {
-            1 => Event::Packet(Packet::from(v)),
+            1 => Event::TcpPacket(Packet::from(v)),
             _ => panic!("unknown event type id: {}", type_id),
         }
     }
