@@ -17,7 +17,7 @@ pub struct MsgWorker<T>
 where
     T: MsgHandler,
 {
-    handler: Arc<Mutex<T>>,
+    pub handler: Arc<Mutex<T>>,
     sender: Option<mpsc::Sender<T::MsgType>>,
 }
 

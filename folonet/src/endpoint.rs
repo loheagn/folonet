@@ -26,6 +26,12 @@ impl Endpoint {
 
         ip == SERVER_IP
     }
+
+    pub fn to_k_endpoint(&self) -> KEndpoint {
+        let ip = u32::from(self.ip).to_be();
+        let port = self.port.to_be();
+        KEndpoint::new(ip, port)
+    }
 }
 
 impl ToString for Endpoint {
@@ -78,6 +84,15 @@ impl Hash for Connection {
         } else {
             b.hash(state);
             a.hash(state);
+        }
+    }
+}
+
+impl Into<KConnection> for Connection {
+    fn into(self) -> KConnection {
+        KConnection {
+            from: self.from.to_k_endpoint(),
+            to: self.to.to_k_endpoint(),
         }
     }
 }

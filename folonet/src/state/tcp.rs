@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use anyhow::Ok;
-use folonet_common::event::{Event, Packet};
+use folonet_common::event::Packet;
 use log::{debug, info};
 use rust_fsm::*;
+use tokio::sync::mpsc;
 
 use crate::{
     endpoint::{Connection, Direction, Endpoint},
+    message::Message,
     worker::{MsgHandler, MsgWorker},
 };
 
@@ -64,6 +66,8 @@ pub enum SpecialPacket {
 pub struct ConnectionState {
     client: TcpFsmState,
     server: TcpFsmState,
+
+    close_event_sender: Option<mpsc::Sender<Message>>,
 }
 
 impl ConnectionState {
@@ -71,6 +75,26 @@ impl ConnectionState {
         ConnectionState {
             client: TcpFsmState::new(from),
             server: TcpFsmState::new(to),
+            close_event_sender: None,
+        }
+    }
+
+    pub fn set_close_event_sender(&mut self, sender: mpsc::Sender<Message>) {
+        self.close_event_sender.replace(sender);
+    }
+}
+
+impl MsgHandler for ConnectionState {
+    type MsgType = PacketMsg;
+
+    async fn handle_message(&mut self, msg: PacketMsg) {
+        let _ = self.client.handle_packet_event(&msg).await;
+        let _ = self.server.handle_packet_event(&msg).await;
+
+        if self.client.is_closed() && self.server.is_closed() {
+            if let Some(sender) = &self.close_event_sender {
+                let _ = sender.send(Message::close_msg(msg.from, msg.to)).await;
+            }
         }
     }
 }
@@ -88,20 +112,6 @@ impl PacketHandler for TcpConnState {
 impl TcpConnState {
     pub fn from_connection(conn: &Connection) -> Self {
         TcpConnState::new(ConnectionState::new(&conn.from, &conn.to))
-    }
-}
-
-impl MsgHandler for ConnectionState {
-    type MsgType = PacketMsg;
-
-    async fn handle_message(&mut self, msg: Self::MsgType) {
-        match msg.event {
-            Event::TcpPacket(_) => {
-                let _ = self.client.handle_packet_event(&msg).await;
-                let _ = self.server.handle_packet_event(&msg).await;
-            }
-            _ => {}
-        }
     }
 }
 
@@ -126,17 +136,16 @@ impl TcpFsmState {
         }
     }
 
+    fn is_closed(&self) -> bool {
+        self.fsm.state() == &TCPState::Closed
+    }
+
     pub async fn handle_packet_event(&mut self, msg: &PacketMsg) -> Result<(), anyhow::Error> {
-        let packet = match msg.event {
-            Event::TcpPacket(p) => Some(p),
-            _ => None,
+        let packet = match msg.packet {
+            Some(p) => p,
+            _ => return Ok(()),
         };
 
-        if packet.is_none() {
-            return Ok(());
-        }
-
-        let packet = packet.unwrap();
         let direction = msg.direction(&self.e);
 
         info!(

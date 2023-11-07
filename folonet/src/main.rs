@@ -18,10 +18,12 @@ use tokio::runtime::Runtime;
 use tokio::signal;
 
 use crate::endpoint::{endpoint_pair_from_notification, Endpoint, UConnection, UEndpoint};
-use crate::service::{Message, Service};
+use crate::message::Message;
+use crate::service::Service;
 use crate::worker::MsgWorker;
 
 mod endpoint;
+mod message;
 mod service;
 mod state;
 mod worker;
@@ -171,7 +173,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
                     if let Some(service) = service {
                         if let Some(sender) = service.msg_sender() {
-                            let msg = Message::new(notification);
+                            let msg = Message::from_notification(notification);
                             let result = sender.send(msg.clone()).await;
                             if result.is_err() {
                                 error!(

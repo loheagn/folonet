@@ -1,35 +1,14 @@
-use aya::maps::{HashMap as AyaHashMap, MapData as AyaMapData};
-use folonet_common::{event::Event, Notification};
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicBool, Arc},
 };
 
 use crate::{
-    endpoint::{Connection, Endpoint, UConnection},
-    state::{ConnectionStateMgr, PacketMsg},
-    worker::MsgHandler,
+    endpoint::{Endpoint, UConnection},
+    message::{Message, MessageType},
+    state::{BpfConnectionMap, ConnectionStateMgr, PacketMsg},
+    worker::{MsgHandler, MsgWorker},
 };
-
-#[derive(Debug, Clone)]
-pub struct Message(Notification);
-
-impl Message {
-    pub fn new(notification: Notification) -> Self {
-        Self(notification)
-    }
-
-    pub fn connection(&self) -> Connection {
-        let k_connection = self.0.connection;
-        Connection {
-            from: Endpoint::new(k_connection.from),
-            to: Endpoint::new(k_connection.to),
-        }
-    }
-}
-
-pub type BpfConnectionMap =
-    Arc<tokio::sync::Mutex<AyaHashMap<AyaMapData, UConnection, UConnection>>>;
 
 pub struct Service {
     pub name: String,
@@ -38,22 +17,24 @@ pub struct Service {
     pub active: AtomicBool,
     pub client_connection_map: HashMap<Endpoint, Endpoint>,
     pub server_connection_map: HashMap<Endpoint, Endpoint>,
-    pub state_mgr: ConnectionStateMgr,
-
-    pub connection_map: BpfConnectionMap, // reference the bpf map
+    pub state_mgr: MsgWorker<ConnectionStateMgr>,
 }
 
 impl MsgHandler for Service {
     type MsgType = Message;
 
     async fn handle_message(&mut self, msg: Self::MsgType) {
-        let notification = msg.0;
-        match notification.event {
-            Event::TcpPacket(_) | Event::UdpPacket(_) => {
-                let msg = PacketMsg::new(msg.connection(), notification.event);
-                self.state_mgr.handle_packet_msg(msg).await;
+        match msg.msg_type {
+            MessageType::Packet(_) => {
+                let packet_msg = match PacketMsg::try_from(msg) {
+                    Ok(packet_msg) => packet_msg,
+                    Err(_) => return (),
+                };
+
+                self.state_mgr.handle_packet_msg(packet_msg).await;
             }
-        };
+            MessageType::Close => {}
+        }
     }
 }
 
@@ -65,7 +46,9 @@ impl Service {
         is_tcp: bool,
         connection_map: BpfConnectionMap,
     ) -> Self {
-        let state_mgr = ConnectionStateMgr::new(is_tcp);
+        let conn_mgr = ConnectionStateMgr::new(is_tcp, connection_map);
+        let state_mgr = MsgWorker::new(conn_mgr);
+
         let service = Service {
             name,
             local_endpoint,
@@ -74,7 +57,6 @@ impl Service {
             client_connection_map: HashMap::new(),
             server_connection_map: HashMap::new(),
             state_mgr,
-            connection_map,
         };
         service
     }
