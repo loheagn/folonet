@@ -5,6 +5,7 @@ use event::Event;
 use network_types::{tcp::TcpHdr, udp::UdpHdr};
 
 pub mod event;
+pub mod queue;
 
 pub const CLIENT_IP: u32 = build_ip_u32(192, 168, 174, 142);
 // pub const CLIENT_IP: u32 = build_ip_u32(192, 168, 174, 139);

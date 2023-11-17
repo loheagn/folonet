@@ -9,26 +9,39 @@ use crate::endpoint::{Connection, Endpoint};
 pub struct Message {
     pub from: Endpoint,
     pub to: Endpoint,
+    pub local_in: Endpoint,
+    pub local_out: Endpoint,
+    pub from_client: bool,
     pub msg_type: MessageType,
 }
 
 impl Message {
-    pub fn from_notification(notification: Notification) -> Self {
+    pub fn from_notification(notification: Notification, from_client: bool) -> Self {
         let msg_type = match notification.event {
             Event::TcpPacket(packet) => MessageType::Packet(PacketMsgType::TCP(packet)),
             Event::UdpPacket(_) => MessageType::Packet(PacketMsgType::UDP),
         };
         let k_connection = notification.connection;
-        Message {
-            from: Endpoint::new(k_connection.from),
-            to: Endpoint::new(k_connection.to),
-            msg_type,
-        }
-    }
 
-    pub fn close_msg(from: Endpoint, to: Endpoint) -> Self {
-        let msg_type = MessageType::Close;
-        Message { from, to, msg_type }
+        if from_client {
+            Message {
+                from: Endpoint::new(k_connection.from),
+                to: Endpoint::new(k_connection.to),
+                local_in: Endpoint::new(notification.local_in_endpoint),
+                local_out: Endpoint::new(notification.lcoal_out_endpoint),
+                from_client,
+                msg_type,
+            }
+        } else {
+            Message {
+                from: Endpoint::new(k_connection.to),
+                to: Endpoint::new(k_connection.from),
+                local_in: Endpoint::new(notification.lcoal_out_endpoint),
+                local_out: Endpoint::new(notification.local_in_endpoint),
+                from_client,
+                msg_type,
+            }
+        }
     }
 
     pub fn connection(&self) -> Connection {

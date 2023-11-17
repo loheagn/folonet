@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 use aya::maps::{HashMap as AyaHashMap, MapData as AyaMapData};
 use enum_dispatch::enum_dispatch;
@@ -33,7 +37,10 @@ pub type BpfConnectionMap =
 
 pub struct ConnectionStateMgr {
     is_tcp: bool,
-    connection_map: HashMap<Connection, L4ConnState>,
+    is_active: AtomicBool,
+    state_map: HashMap<Connection, L4ConnState>,
+    port_map: HashMap<Connection, u16>,
+
     bpf_conn_map: BpfConnectionMap, // reference the bpf map
 }
 
@@ -41,7 +48,9 @@ impl ConnectionStateMgr {
     pub fn new(is_tcp: bool, bpf_conn_map: BpfConnectionMap) -> Self {
         ConnectionStateMgr {
             is_tcp,
-            connection_map: HashMap::new(),
+            is_active: AtomicBool::new(false),
+            state_map: HashMap::new(),
+            port_map: HashMap::new(),
             bpf_conn_map,
         }
     }
@@ -52,7 +61,7 @@ impl MsgWorker<ConnectionStateMgr> {
         let mut conn_mgr = self.handler.lock().await;
         let is_tcp = conn_mgr.is_tcp;
         let connection_state = conn_mgr
-            .connection_map
+            .state_map
             .entry(msg.connection())
             .or_insert_with(|| {
                 if is_tcp {
@@ -70,17 +79,31 @@ impl MsgWorker<ConnectionStateMgr> {
 }
 
 impl MsgHandler for ConnectionStateMgr {
-    type MsgType = Message;
+    type MsgType = CloseMsg;
 
     async fn handle_message(&mut self, msg: Self::MsgType) {
-        match msg.msg_type {
-            MessageType::Close => {
-                let conn = msg.connection();
-                self.connection_map.remove(&conn);
+        let conn = msg.connection();
+        self.state_map.remove(&conn);
 
-                info!("remove connection {:?}", conn);
-            }
-            _ => {}
+        info!("remove connection {:?}", conn);
+    }
+}
+
+#[derive(Debug)]
+pub struct CloseMsg {
+    from: Endpoint,
+    to: Endpoint,
+}
+
+impl CloseMsg {
+    pub fn new(from: Endpoint, to: Endpoint) -> Self {
+        CloseMsg { from, to }
+    }
+
+    fn connection(&self) -> Connection {
+        Connection {
+            from: self.from,
+            to: self.to,
         }
     }
 }
@@ -109,20 +132,29 @@ impl PacketMsg {
     }
 }
 
-impl TryFrom<Message> for PacketMsg {
+impl TryFrom<&Message> for PacketMsg {
     type Error = ();
-    fn try_from(msg: Message) -> Result<Self, Self::Error> {
-        match msg.msg_type {
+    fn try_from(msg: &Message) -> Result<Self, Self::Error> {
+        match &msg.msg_type {
             MessageType::Packet(packet_type) => {
                 let packet = match packet_type {
-                    PacketMsgType::TCP(p) => Some(p),
+                    PacketMsgType::TCP(p) => Some(p.clone()),
                     PacketMsgType::UDP => None,
                 };
-                Ok(PacketMsg {
-                    from: msg.from,
-                    to: msg.to,
-                    packet: packet,
-                })
+                let packet_msg = if msg.from_client {
+                    PacketMsg {
+                        from: msg.from,
+                        to: msg.to,
+                        packet,
+                    }
+                } else {
+                    PacketMsg {
+                        from: msg.to,
+                        to: msg.from,
+                        packet,
+                    }
+                };
+                Ok(packet_msg)
             }
             _ => return Err(()),
         }

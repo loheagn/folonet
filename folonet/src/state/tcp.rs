@@ -12,7 +12,7 @@ use crate::{
     worker::{MsgHandler, MsgWorker},
 };
 
-use super::{PacketHandler, PacketMsg};
+use super::{CloseMsg, PacketHandler, PacketMsg};
 
 state_machine! {
     derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)
@@ -67,7 +67,7 @@ pub struct ConnectionState {
     client: TcpFsmState,
     server: TcpFsmState,
 
-    close_event_sender: Option<mpsc::Sender<Message>>,
+    close_event_sender: Option<mpsc::Sender<CloseMsg>>,
 }
 
 impl ConnectionState {
@@ -79,7 +79,7 @@ impl ConnectionState {
         }
     }
 
-    pub fn set_close_event_sender(&mut self, sender: mpsc::Sender<Message>) {
+    pub fn set_close_event_sender(&mut self, sender: mpsc::Sender<CloseMsg>) {
         self.close_event_sender.replace(sender);
     }
 }
@@ -93,7 +93,7 @@ impl MsgHandler for ConnectionState {
 
         if self.client.is_closed() && self.server.is_closed() {
             if let Some(sender) = &self.close_event_sender {
-                let _ = sender.send(Message::close_msg(msg.from, msg.to)).await;
+                let _ = sender.send(CloseMsg::new(msg.from, msg.to)).await;
             }
         }
     }

@@ -1,5 +1,5 @@
 use anyhow::{Context, Ok};
-use aya::maps::{HashMap as AyaHashmap, MapData as AyaMapData, RingBuf};
+use aya::maps::{HashMap as AyaHashmap, MapData as AyaMapData, Queue, RingBuf};
 use aya::programs::{Xdp, XdpFlags};
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
@@ -17,7 +17,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::runtime::Runtime;
 use tokio::signal;
 
-use crate::endpoint::{endpoint_pair_from_notification, Endpoint, UConnection, UEndpoint};
+use crate::endpoint::{endpoint_pair_from_notification, Endpoint, UConnection, UEndpoint, UQueue};
 use crate::message::Message;
 use crate::service::Service;
 use crate::worker::MsgWorker;
@@ -39,12 +39,12 @@ fn get_bpf() -> Bpf {
     // runtime. This approach is recommended for most real-world use cases. If you would
     // like to specify the eBPF program at runtime rather than at compile-time, you can
     // reach for `Bpf::load_file` instead.
-    #[cfg(debug_assertions)]
-    let bpf = Bpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/debug/folonet"
-    ))
-    .unwrap();
-    #[cfg(not(debug_assertions))]
+    //   #[cfg(debug_assertions)]
+    // let bpf = Bpf::load(include_bytes_aligned!(
+    //     "../../target/bpfel-unknown-none/debug/folonet"
+    // ))
+    // .unwrap();
+    //    #[cfg(not(debug_assertions))]
     let bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/release/folonet"
     ))
@@ -79,7 +79,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let server_endpoint = UEndpoint::new(KEndpoint::new(SERVER_IP.to_be(), 80u16.to_be()));
     let mut server_map: AyaHashmap<_, UEndpoint, UEndpoint> =
         AyaHashmap::try_from(bpf.map_mut("SERVER_MAP").unwrap()).unwrap();
-    server_map.insert(&local_left_endpoint, &server_endpoint, 0)?;
+    server_map.insert(&local_left_endpoint, &server_endpoint.clone(), 0)?;
 
     let mut server_port: AyaHashmap<_, UEndpoint, u8> =
         AyaHashmap::try_from(bpf.map_mut("SERVER_PORT_MAP").unwrap())?;
@@ -95,7 +95,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let program: &mut Xdp = bpf.program_mut("folonet").unwrap().try_into().unwrap();
     program.load().unwrap();
 
-    let iface_list = ["ens33", "ens37", "lo"];
+    let iface_list = ["enp0s3"];
     iface_list.iter().for_each(|iface| {
         let opt = Opt {
             iface: iface.to_string(),
@@ -106,6 +106,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut bpf_packet_event_map = bpf.take_map("PACKET_EVENT").unwrap();
     let bpf_connection_map = bpf.take_map("CONNECTION").unwrap();
+
+    let mut bpf_service_ports_map = bpf.take_map("SERVICE_PORTS_1").unwrap();
+    let mut bpf_service_ports_map: Queue<_, u16> = Queue::try_from(bpf_service_ports_map).unwrap();
 
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
@@ -135,6 +138,9 @@ async fn main() -> Result<(), anyhow::Error> {
                     connection_map.clone(),
                 )),
             );
+            for i in 10000..60000 {
+                bpf_service_ports_map.push(i as u16, 0).unwrap();
+            }
 
             let mut ring_buf: RingBuf<&mut aya::maps::MapData> =
                 RingBuf::try_from(&mut bpf_packet_event_map).unwrap();
@@ -161,19 +167,23 @@ async fn main() -> Result<(), anyhow::Error> {
                         local_out_endpoint.to_string(),
                     );
 
+                    let mut from_client = true;
+
                     let service = if notification.is_tcp() {
-                        tcp_service_map
-                            .get(&local_in_endpoint)
-                            .or_else(|| tcp_service_map.get(&local_out_endpoint))
+                        tcp_service_map.get(&local_in_endpoint).or_else(|| {
+                            from_client = false;
+                            tcp_service_map.get(&local_out_endpoint)
+                        })
                     } else {
-                        udp_service_map
-                            .get(&local_in_endpoint)
-                            .or_else(|| udp_service_map.get(&local_out_endpoint))
+                        udp_service_map.get(&local_in_endpoint).or_else(|| {
+                            from_client = false;
+                            udp_service_map.get(&local_out_endpoint)
+                        })
                     };
 
                     if let Some(service) = service {
                         if let Some(sender) = service.msg_sender() {
-                            let msg = Message::from_notification(notification);
+                            let msg = Message::from_notification(notification, from_client);
                             let result = sender.send(msg.clone()).await;
                             if result.is_err() {
                                 error!(

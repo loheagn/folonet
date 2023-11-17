@@ -1,7 +1,7 @@
 use std::{hash::Hash, net::Ipv4Addr};
 
 use aya::Pod;
-use folonet_common::{KConnection, KEndpoint, Notification, SERVER_IP};
+use folonet_common::{queue::Queue, KConnection, KEndpoint, Notification, SERVER_IP};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct UEndpoint(KEndpoint);
@@ -102,6 +102,30 @@ pub enum Direction {
     From,
     To,
 }
+
+#[derive(Clone, Copy)]
+pub struct UQueue<T>(Queue<T>)
+where
+    T: Clone + Copy + Sized + Default;
+
+impl<T> UQueue<T>
+where
+    T: Clone + Copy + Sized + Default,
+{
+    pub fn new() -> Self {
+        UQueue(Queue::new())
+    }
+
+    pub fn push(&mut self, item: T) {
+        self.0.push(item);
+    }
+
+    pub fn pop(&mut self) -> T {
+        self.0.pop()
+    }
+}
+
+unsafe impl Pod for UQueue<u16> {}
 
 mod test {
 

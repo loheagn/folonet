@@ -6,11 +6,11 @@ use aya_bpf::{
     bindings::xdp_action,
     helpers::bpf_csum_diff,
     macros::{map, xdp},
-    maps::{HashMap, RingBuf},
+    maps::{HashMap, Queue, RingBuf},
     programs::XdpContext,
 };
 
-use aya_log_ebpf::debug;
+use aya_log_ebpf::{debug, info};
 use core::{
     mem::{self, offset_of},
     ptr::copy,
@@ -64,6 +64,9 @@ static IP_MAC_MAP: HashMap<u32, Mac> = HashMap::with_max_entries(1024, 0);
 
 #[map]
 static PACKET_EVENT: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
+
+#[map]
+static SERVICE_PORTS_1: Queue<u16> = Queue::with_max_entries(50000, 0);
 
 #[inline(always)]
 fn extract_way(iphdr: *const Ipv4Hdr, l4_hdr: &L4Hdr) -> Result<KConnection, ()> {
@@ -179,15 +182,15 @@ fn update_packet_by_way(
 
 #[inline(always)]
 fn debug_connection(ctx: &XdpContext, way: &KConnection, extra_info: &str) -> Result<(), ()> {
-    debug!(
-        ctx,
-        "{} from {:i}:{}, to {:i}:{}",
-        extra_info,
-        u32::from_be(way.from.ip()),
-        u16::from_be(way.from.port()),
-        u32::from_be(way.to.ip()),
-        u16::from_be(way.to.port())
-    );
+    // debug!(
+    //     ctx,
+    //     "{} from {:i}:{}, to {:i}:{}",
+    //     extra_info,
+    //     u32::from_be(way.from.ip()),
+    //     u16::from_be(way.from.port()),
+    //     u32::from_be(way.to.ip()),
+    //     u16::from_be(way.to.port())
+    // );
     Ok(())
 }
 
@@ -221,16 +224,31 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
 
     if unsafe { CONNECTION.get(&declare_way) }.is_none() {
         if unsafe { SERVER_PORT_MAP.get(&declare_way.to) }.is_none() {
+            // info!(&ctx, "drop");
             return Ok(xdp_action::XDP_PASS);
         }
 
         // create output way
         // find a available way
-        let from = KEndpoint::new(LOCAL_IP.to_be(), 8899u16.to_be());
+        // let from = KEndpoint::new(LOCAL_IP.to_be(), 8899u16.to_be());
+        // let to = match unsafe { SERVER_MAP.get(&declare_way.to) } {
+        //     Some(to) => to,
+        //     None => return Ok(xdp_action::XDP_PASS),
+        // };
+
         let to = match unsafe { SERVER_MAP.get(&declare_way.to) } {
             Some(to) => to,
             None => return Ok(xdp_action::XDP_PASS),
         };
+        let from_port = SERVICE_PORTS_1.pop();
+        if from_port.is_none() {
+            // info!(&ctx, "drop");
+            return Ok(xdp_action::XDP_DROP);
+        }
+        let from_port = from_port.unwrap();
+        // let from_port: u16 = 8899;
+        let from = KEndpoint::new(LOCAL_IP.to_be(), from_port.to_be());
+
         let out_way = KConnection { from, to: *to };
         CONNECTION
             .insert(&declare_way, &out_way, 0)
@@ -255,19 +273,19 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
     debug_connection(&ctx, &output_way, "output:")?;
 
     // notify to userspace
-    if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
-        let notification = Notification {
-            local_in_endpoint: declare_way.to,
-            lcoal_out_endpoint: output_way.from,
-            connection: KConnection {
-                from: declare_way.from,
-                to: output_way.to,
-            },
-            event: Event::new_packet_event(&l4_hdr),
-        };
-        e.write(notification);
-        e.submit(0);
-    }
+    // if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
+    //     let notification = Notification {
+    //         local_in_endpoint: declare_way.to,
+    //         lcoal_out_endpoint: output_way.from,
+    //         connection: KConnection {
+    //             from: declare_way.from,
+    //             to: output_way.to,
+    //         },
+    //         event: Event::new_packet_event(&l4_hdr),
+    //     };
+    //     e.write(notification);
+    //     e.submit(0);
+    // }
 
     update_packet_by_way(&ctx, ethhdr, iphdr, &mut l4_hdr, &output_way)?;
 
