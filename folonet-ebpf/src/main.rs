@@ -15,9 +15,7 @@ use core::{
     mem::{self, offset_of},
     ptr::copy,
 };
-use folonet_common::{
-    csum_fold_helper, event::Event, BiPort, KConnection, KEndpoint, L4Hdr, Mac, Notification,
-};
+use folonet_common::{csum_fold_helper, BiPort, KConnection, KEndpoint, L4Hdr, Mac, Notification};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{IpProto, Ipv4Hdr},
@@ -87,18 +85,18 @@ fn extract_way(
     };
 
     // record ip with mac
-    // if unsafe { IP_MAC_MAP.get(&src_ip).is_none() } {
-    //     unsafe {
-    //         let mac = Mac::from((*ethhdr).src_addr);
-    //         IP_MAC_MAP.insert(&src_ip, &mac, 0).map_err(|_| {})?;
-    //     };
-    // }
-    // if unsafe { IP_MAC_MAP.get(&dst_ip).is_none() } {
-    //     unsafe {
-    //         let mac = Mac::from((*ethhdr).dst_addr);
-    //         IP_MAC_MAP.insert(&dst_ip, &mac, 0).map_err(|_| {})?;
-    //     };
-    // }
+    if unsafe { IP_MAC_MAP.get(&src_ip).is_none() } {
+        unsafe {
+            let mac = Mac::from((*ethhdr).src_addr);
+            IP_MAC_MAP.insert(&src_ip, &mac, 0).map_err(|_| {})?;
+        };
+    }
+    if unsafe { IP_MAC_MAP.get(&dst_ip).is_none() } {
+        unsafe {
+            let mac = Mac::from((*ethhdr).dst_addr);
+            IP_MAC_MAP.insert(&dst_ip, &mac, 0).map_err(|_| {})?;
+        };
+    }
 
     Ok(connection)
 }
