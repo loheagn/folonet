@@ -5,19 +5,8 @@ use event::Event;
 use network_types::{tcp::TcpHdr, udp::UdpHdr};
 
 pub mod event;
+pub mod maps;
 pub mod queue;
-
-pub const CLIENT_IP: u32 = build_ip_u32(192, 168, 174, 142);
-// pub const CLIENT_IP: u32 = build_ip_u32(192, 168, 174, 139);
-
-pub const SERVER_IP: u32 = build_ip_u32(192, 168, 174, 141);
-pub const LOCAL_IP: u32 = build_ip_u32(192, 168, 174, 140);
-
-pub const SERVER_MAC: [u8; 6] = [0x00, 0x50, 0x56, 0x3e, 0xa4, 0xf6];
-pub const LOCAL_MAC: [u8; 6] = [0x00, 0x0c, 0x29, 0x6e, 0xcc, 0x7e];
-
-pub const CLIENT_MAC: [u8; 6] = [0x00, 0x50, 0x56, 0x3e, 0x0b, 0xba];
-// pub const CLIENT_MAC: [u8; 6] = [0x00, 0x50, 0x56, 0x3e, 0xa4, 0xf6];
 
 pub enum L4Hdr {
     TcpHdr(*mut TcpHdr),
@@ -145,10 +134,6 @@ pub fn csum_fold_helper(csum: u64) -> u16 {
     !csum as u16
 }
 
-pub const fn build_ip_u32(a: i32, b: i32, c: i32, d: i32) -> u32 {
-    ((a as u32) << 24) | ((b as u32) << 16) | ((c as u32) << 8) | (d as u32)
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KEndpoint(u64);
 
@@ -227,6 +212,10 @@ impl Notification {
 }
 
 mod test {
+    const fn build_ip_u32(a: i32, b: i32, c: i32, d: i32) -> u32 {
+        ((a as u32) << 24) | ((b as u32) << 16) | ((c as u32) << 8) | (d as u32)
+    }
+
     #[test]
     fn test_mac_from_into() {
         use crate::Mac;
@@ -241,9 +230,8 @@ mod test {
     #[test]
     fn test_endpoint() {
         use crate::KEndpoint;
-        use crate::LOCAL_IP;
 
-        let ip = LOCAL_IP;
+        let ip = build_ip_u32(192, 168, 174, 140);
         let port: u16 = 80;
         let endpoint = KEndpoint::new(ip.to_be(), port.to_be());
 
@@ -277,10 +265,10 @@ mod test {
     fn test_notification_write_read_bytes() {
         use crate::{
             event::{Event, Packet, PacketFlag},
-            KConnection, KEndpoint, Notification, LOCAL_IP,
+            KConnection, KEndpoint, Notification,
         };
 
-        let ip = LOCAL_IP;
+        let ip = build_ip_u32(192, 168, 174, 140);
         let port: u16 = 80;
         let endpoint = KEndpoint::new(ip.to_be(), port.to_be());
         let connection = KConnection {

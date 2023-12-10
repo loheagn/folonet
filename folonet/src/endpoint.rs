@@ -1,7 +1,13 @@
+use std::collections::HashSet;
+use std::net::SocketAddr;
 use std::{hash::Hash, net::Ipv4Addr};
 
 use aya::Pod;
-use folonet_common::{queue::Queue, KConnection, KEndpoint, Notification, SERVER_IP};
+use folonet_common::Mac;
+use folonet_common::{queue::Queue, KConnection, KEndpoint, Notification};
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct UEndpoint(KEndpoint);
@@ -14,23 +20,58 @@ impl UEndpoint {
 
 unsafe impl Pod for UEndpoint {}
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Endpoint {
     pub ip: Ipv4Addr,
     pub port: u16,
 }
 
+static mut SERVER_IP_SET: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+pub fn set_server_ip(ip: &String) {
+    let ip: u32 = ip.parse::<Ipv4Addr>().unwrap().into();
+    unsafe {
+        let mut set = SERVER_IP_SET.try_lock().unwrap();
+        set.insert(ip);
+    }
+}
+
+pub fn mac_from_string(mac: &String) -> Mac {
+    let mac: Vec<u8> = mac
+        .split(":")
+        .into_iter()
+        .map(|s| u8::from_str_radix(s, 16).unwrap())
+        .collect();
+    let mac: [u8; 6] = mac.try_into().unwrap();
+    Mac::from(mac)
+}
+
 impl Endpoint {
     pub fn is_server_side(&self) -> bool {
         let ip = u32::from(self.ip);
-
-        ip == SERVER_IP
+        unsafe { SERVER_IP_SET.try_lock().unwrap().contains(&ip) }
     }
 
     pub fn to_k_endpoint(&self) -> KEndpoint {
         let ip = u32::from(self.ip).to_be();
         let port = self.port.to_be();
         KEndpoint::new(ip, port)
+    }
+
+    pub fn to_u_endpoint(&self) -> UEndpoint {
+        UEndpoint(self.to_k_endpoint())
+    }
+}
+
+impl From<&String> for Endpoint {
+    fn from(s: &String) -> Self {
+        let server: SocketAddr = s.parse().unwrap();
+        match server {
+            SocketAddr::V4(addr) => Endpoint {
+                ip: addr.ip().clone(),
+                port: addr.port(),
+            },
+            SocketAddr::V6(_) => panic!(),
+        }
     }
 }
 

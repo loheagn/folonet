@@ -9,6 +9,8 @@ user = ["aya"]
 
 [dependencies]
 aya = { git = "https://github.com/aya-rs/aya", optional = true }
+aya-bpf = { git = "https://github.com/aya-rs/aya" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
 network-types = "0.0.4"
 byteorder = { version = "1", default-features = false }
 bitflags = "2.4.1"

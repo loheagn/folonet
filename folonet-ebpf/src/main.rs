@@ -17,7 +17,6 @@ use core::{
 };
 use folonet_common::{
     csum_fold_helper, event::Event, BiPort, KConnection, KEndpoint, L4Hdr, Mac, Notification,
-    LOCAL_IP,
 };
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -25,6 +24,8 @@ use network_types::{
     tcp::TcpHdr,
     udp::UdpHdr,
 };
+
+mod maps;
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -57,9 +58,6 @@ static CONNECTION: HashMap<KConnection, KConnection> = HashMap::with_max_entries
 static SERVER_MAP: HashMap<KEndpoint, KEndpoint> = HashMap::with_max_entries(1024, 0);
 
 #[map]
-static SERVER_PORT_MAP: HashMap<KEndpoint, u8> = HashMap::with_max_entries(1024, 0);
-
-#[map]
 static IP_MAC_MAP: HashMap<u32, Mac> = HashMap::with_max_entries(1024, 0);
 
 #[map]
@@ -68,8 +66,15 @@ static PACKET_EVENT: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
 #[map]
 static SERVICE_PORTS_1: Queue<u16> = Queue::with_max_entries(50000, 0);
 
+#[map]
+static LOCAL_IP_MAP: HashMap<u32, u32> = HashMap::with_max_entries(10, 0);
+
 #[inline(always)]
-fn extract_way(iphdr: *const Ipv4Hdr, l4_hdr: &L4Hdr) -> Result<KConnection, ()> {
+fn extract_way(
+    ethhdr: *const EthHdr,
+    iphdr: *const Ipv4Hdr,
+    l4_hdr: &L4Hdr,
+) -> Result<KConnection, ()> {
     let src_ip = unsafe { (*iphdr).src_addr };
     let dst_ip = unsafe { (*iphdr).dst_addr };
 
@@ -80,6 +85,20 @@ fn extract_way(iphdr: *const Ipv4Hdr, l4_hdr: &L4Hdr) -> Result<KConnection, ()>
         from: KEndpoint::new(src_ip, src_port),
         to: KEndpoint::new(dst_ip, dst_port),
     };
+
+    // record ip with mac
+    // if unsafe { IP_MAC_MAP.get(&src_ip).is_none() } {
+    //     unsafe {
+    //         let mac = Mac::from((*ethhdr).src_addr);
+    //         IP_MAC_MAP.insert(&src_ip, &mac, 0).map_err(|_| {})?;
+    //     };
+    // }
+    // if unsafe { IP_MAC_MAP.get(&dst_ip).is_none() } {
+    //     unsafe {
+    //         let mac = Mac::from((*ethhdr).dst_addr);
+    //         IP_MAC_MAP.insert(&dst_ip, &mac, 0).map_err(|_| {})?;
+    //     };
+    // }
 
     Ok(connection)
 }
@@ -182,19 +201,22 @@ fn update_packet_by_way(
 
 #[inline(always)]
 fn debug_connection(ctx: &XdpContext, way: &KConnection, extra_info: &str) -> Result<(), ()> {
-    // debug!(
-    //     ctx,
-    //     "{} from {:i}:{}, to {:i}:{}",
-    //     extra_info,
-    //     u32::from_be(way.from.ip()),
-    //     u16::from_be(way.from.port()),
-    //     u32::from_be(way.to.ip()),
-    //     u16::from_be(way.to.port())
-    // );
+    debug!(
+        ctx,
+        "{} from {:i}:{}, to {:i}:{}",
+        extra_info,
+        u32::from_be(way.from.ip()),
+        u16::from_be(way.from.port()),
+        u32::from_be(way.to.ip()),
+        u16::from_be(way.to.port())
+    );
     Ok(())
 }
 
 fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
+    let xdp_md_ctx = unsafe { *(ctx.ctx) };
+    let ifidx = xdp_md_ctx.ingress_ifindex;
+
     let ethhdr: *mut EthHdr = ptr_at(&ctx, 0)?;
 
     match unsafe { (*ethhdr).ether_type } {
@@ -218,36 +240,26 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         _ => return Ok(xdp_action::XDP_PASS),
     };
 
-    let declare_way = extract_way(iphdr, &l4_hdr)?;
+    let declare_way = extract_way(ethhdr, iphdr, &l4_hdr)?;
 
     debug_connection(&ctx, &declare_way, "input: ")?;
 
     if unsafe { CONNECTION.get(&declare_way) }.is_none() {
-        if unsafe { SERVER_PORT_MAP.get(&declare_way.to) }.is_none() {
-            // info!(&ctx, "drop");
-            return Ok(xdp_action::XDP_PASS);
-        }
-
-        // create output way
-        // find a available way
-        // let from = KEndpoint::new(LOCAL_IP.to_be(), 8899u16.to_be());
-        // let to = match unsafe { SERVER_MAP.get(&declare_way.to) } {
-        //     Some(to) => to,
-        //     None => return Ok(xdp_action::XDP_PASS),
-        // };
-
         let to = match unsafe { SERVER_MAP.get(&declare_way.to) } {
             Some(to) => to,
             None => return Ok(xdp_action::XDP_PASS),
         };
         let from_port = SERVICE_PORTS_1.pop();
         if from_port.is_none() {
-            // info!(&ctx, "drop");
             return Ok(xdp_action::XDP_DROP);
         }
         let from_port = from_port.unwrap();
-        // let from_port: u16 = 8899;
-        let from = KEndpoint::new(LOCAL_IP.to_be(), from_port.to_be());
+        let local_ip = unsafe { LOCAL_IP_MAP.get(&ifidx) };
+        if local_ip.is_none() {
+            return Ok(xdp_action::XDP_DROP);
+        }
+        let local_ip = local_ip.unwrap();
+        let from = KEndpoint::new(local_ip.to_be(), from_port.to_be());
 
         let out_way = KConnection { from, to: *to };
         CONNECTION

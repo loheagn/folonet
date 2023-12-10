@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    config::ServiceConfig,
     endpoint::{Connection, Endpoint, UConnection},
     message::{Message, MessageType},
     state::{BpfConnectionMap, ConnectionStateMgr, PacketMsg},
@@ -42,25 +43,21 @@ impl MsgHandler for Service {
 }
 
 impl Service {
-    pub fn new(
-        name: String,
-        local_endpoint: Endpoint,
-        servers: Vec<Endpoint>,
-        is_tcp: bool,
-        connection_map: BpfConnectionMap,
-    ) -> Self {
+    pub fn new(cfg: &ServiceConfig, connection_map: BpfConnectionMap) -> Self {
+        let local_endpoint = Endpoint::from(&cfg.local_endpoint);
+        let servers: Vec<Endpoint> = cfg.servers.iter().map(|s| Endpoint::from(s)).collect();
         let server_tracker_map: HashMap<Endpoint, MsgWorker<ConnectionStateMgr>> = servers
             .iter()
             .map(|server| {
                 (
                     server.clone(),
-                    MsgWorker::new(ConnectionStateMgr::new(is_tcp, connection_map.clone())),
+                    MsgWorker::new(ConnectionStateMgr::new(cfg.is_tcp, connection_map.clone())),
                 )
             })
             .collect();
 
         let service = Service {
-            name,
+            name: cfg.name.clone(),
             local_endpoint,
             servers,
             active: AtomicBool::new(false),
