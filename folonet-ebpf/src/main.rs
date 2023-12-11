@@ -15,7 +15,9 @@ use core::{
     mem::{self, offset_of},
     ptr::copy,
 };
-use folonet_common::{csum_fold_helper, BiPort, KConnection, KEndpoint, L4Hdr, Mac, Notification};
+use folonet_common::{
+    csum_fold_helper, event::Event, BiPort, KConnection, KEndpoint, L4Hdr, Mac, Notification,
+};
 use network_types::{
     eth::{EthHdr, EtherType},
     ip::{IpProto, Ipv4Hdr},
@@ -283,19 +285,19 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
     debug_connection(&ctx, &output_way, "output:")?;
 
     // notify to userspace
-    // if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
-    //     let notification = Notification {
-    //         local_in_endpoint: declare_way.to,
-    //         lcoal_out_endpoint: output_way.from,
-    //         connection: KConnection {
-    //             from: declare_way.from,
-    //             to: output_way.to,
-    //         },
-    //         event: Event::new_packet_event(&l4_hdr),
-    //     };
-    //     e.write(notification);
-    //     e.submit(0);
-    // }
+    if let Some(mut e) = PACKET_EVENT.reserve::<Notification>(0) {
+        let notification = Notification {
+            local_in_endpoint: declare_way.to,
+            lcoal_out_endpoint: output_way.from,
+            connection: KConnection {
+                from: declare_way.from,
+                to: output_way.to,
+            },
+            event: Event::new_packet_event(&l4_hdr),
+        };
+        e.write(notification);
+        e.submit(0);
+    }
 
     update_packet_by_way(&ctx, ethhdr, iphdr, &mut l4_hdr, &output_way)?;
 

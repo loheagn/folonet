@@ -3,12 +3,12 @@ use folonet_common::{
     Notification,
 };
 
-use crate::endpoint::{Connection, Endpoint};
+use crate::endpoint::{Connection, Endpoint, UConnection};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Message {
-    pub from: Endpoint,
-    pub to: Endpoint,
+    pub client: Endpoint,
+    pub server: Endpoint,
     pub local_in: Endpoint,
     pub local_out: Endpoint,
     pub from_client: bool,
@@ -25,8 +25,8 @@ impl Message {
 
         if from_client {
             Message {
-                from: Endpoint::new(k_connection.from),
-                to: Endpoint::new(k_connection.to),
+                client: Endpoint::new(k_connection.from),
+                server: Endpoint::new(k_connection.to),
                 local_in: Endpoint::new(notification.local_in_endpoint),
                 local_out: Endpoint::new(notification.lcoal_out_endpoint),
                 from_client,
@@ -34,8 +34,8 @@ impl Message {
             }
         } else {
             Message {
-                from: Endpoint::new(k_connection.to),
-                to: Endpoint::new(k_connection.from),
+                client: Endpoint::new(k_connection.to),
+                server: Endpoint::new(k_connection.from),
                 local_in: Endpoint::new(notification.lcoal_out_endpoint),
                 local_out: Endpoint::new(notification.local_in_endpoint),
                 from_client,
@@ -44,10 +44,17 @@ impl Message {
         }
     }
 
+    pub fn to_u_connections(&self) -> (UConnection, UConnection) {
+        (
+            UConnection::new(self.client, self.local_in),
+            UConnection::new(self.server, self.local_out),
+        )
+    }
+
     pub fn connection(&self) -> Connection {
         Connection {
-            from: self.from,
-            to: self.to,
+            from: self.client,
+            to: self.server,
         }
     }
 }

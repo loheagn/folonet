@@ -100,6 +100,15 @@ pub fn endpoint_pair_from_notification(notification: &Notification) -> (Endpoint
 #[derive(Clone, Copy, Debug)]
 pub struct UConnection(KConnection);
 
+impl UConnection {
+    pub fn new(from: Endpoint, to: Endpoint) -> Self {
+        UConnection(KConnection {
+            from: from.to_k_endpoint(),
+            to: to.to_k_endpoint(),
+        })
+    }
+}
+
 unsafe impl Pod for UConnection {}
 
 #[derive(Clone, Copy, Debug, Eq)]

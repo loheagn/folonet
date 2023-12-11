@@ -45,10 +45,21 @@ where
 
         tokio::spawn(async move {
             loop {
-                if let Some(msg) = rx.recv().await {
-                    let mut handler = handler.lock().await;
-                    handler.handle_message(msg).await;
+                tokio::select! {
+                    msg = rx.recv() => {
+                        match msg {
+                            Some(msg) => {
+                                let mut handler = handler.lock().await;
+                                handler.handle_message(msg).await;
+                            }
+                            None => break,
+                        }
+                    }
                 }
+                // if let Some(msg) = rx.recv().await {
+                //     let mut handler = handler.lock().await;
+                //     handler.handle_message(msg).await;
+                // }
             }
         });
 

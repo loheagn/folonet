@@ -132,8 +132,8 @@ async fn main() -> Result<(), anyhow::Error> {
         .map(|i| i.name.clone())
         .collect();
     iface_list.iter().for_each(|iface| {
-        program.attach(iface, XdpFlags::SKB_MODE)
-                .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE").unwrap();
+        program.attach(iface, XdpFlags::DRV_MODE).unwrap();
+        // .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE").unwrap();
     });
 
     let mut bpf_packet_event_map = bpf.take_map("PACKET_EVENT").unwrap();
@@ -151,15 +151,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
             let mut tcp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
             let mut udp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
-
-            global_cfg.services.iter().for_each(|service_cfg| {
-                if service_cfg.is_tcp {
-                    tcp_service_map.insert(
-                        Endpoint::from(&service_cfg.local_endpoint),
-                        MsgWorker::new(Service::new(service_cfg, connection_map.clone())),
-                    );
-                }
-            });
 
             // FIXME: fill the service maps
             // let local_endpoint = Endpoint {
@@ -182,6 +173,20 @@ async fn main() -> Result<(), anyhow::Error> {
             for i in 10000..60000 {
                 bpf_service_ports_map.push(i as u16, 0).unwrap();
             }
+
+            let bpf_service_ports_map = Arc::new(tokio::sync::Mutex::new(bpf_service_ports_map));
+            global_cfg.services.iter().for_each(|service_cfg| {
+                if service_cfg.is_tcp {
+                    tcp_service_map.insert(
+                        Endpoint::from(&service_cfg.local_endpoint),
+                        MsgWorker::new(Service::new(
+                            service_cfg,
+                            connection_map.clone(),
+                            bpf_service_ports_map.clone(),
+                        )),
+                    );
+                }
+            });
 
             let mut ring_buf: RingBuf<&mut aya::maps::MapData> =
                 RingBuf::try_from(&mut bpf_packet_event_map).unwrap();

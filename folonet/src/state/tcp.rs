@@ -191,7 +191,7 @@ impl TcpFsmState {
 
         if self.fsm.state() == &TCPState::TimeWait {
             debug!("{} into time wait.", self.e.to_string());
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            // tokio::time::sleep(Duration::from_secs(5)).await;
             let _ = self.fsm.consume(&TCPInput::TimeExpired);
         }
 
