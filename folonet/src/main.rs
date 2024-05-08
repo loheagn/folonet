@@ -6,6 +6,7 @@ use aya_log::BpfLogger;
 use clap::Parser;
 use config::GlobalConfig;
 use folonet_common::Notification;
+use folonet_common::PORTS_QUEUE_SIZE;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::fs;
@@ -140,7 +141,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut bpf_packet_event_map = bpf.take_map("PACKET_EVENT").unwrap();
     let bpf_connection_map = bpf.take_map("CONNECTION").unwrap();
 
-    let bpf_service_ports_map = bpf.take_map("SERVICE_PORTS_1").unwrap();
+    let bpf_service_ports_map = bpf.take_map("SERVICE_PORTS").unwrap();
     let mut bpf_service_ports_map: Queue<_, u16> = Queue::try_from(bpf_service_ports_map).unwrap();
 
     std::thread::spawn(move || {
@@ -171,7 +172,7 @@ async fn main() -> Result<(), anyhow::Error> {
             //         connection_map.clone(),
             //     )),
             // );
-            for i in 10000..60000 {
+            for i in 10000..(10000 + PORTS_QUEUE_SIZE) {
                 bpf_service_ports_map.push(i as u16, 0).unwrap();
             }
 

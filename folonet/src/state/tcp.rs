@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::Ok;
 use folonet_common::event::Packet;
 use log::{debug, info};
@@ -8,7 +6,6 @@ use tokio::sync::mpsc;
 
 use crate::{
     endpoint::{Connection, Direction, Endpoint},
-    message::Message,
     worker::{MsgHandler, MsgWorker},
 };
 

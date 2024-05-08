@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    hash::Hash,
     sync::{atomic::AtomicBool, Arc},
 };
 
@@ -8,7 +7,6 @@ use aya::maps::{HashMap as AyaHashMap, MapData as AyaMapData, Queue};
 use enum_dispatch::enum_dispatch;
 use folonet_common::event::Packet;
 use log::info;
-use tokio::sync::mpsc;
 
 use crate::{
     endpoint::{Connection, Direction, Endpoint, UConnection},
@@ -132,6 +130,8 @@ impl MsgHandler for ConnectionStateMgr {
             conn_map.remove(&u_conns.0).unwrap();
             conn_map.remove(&u_conns.1).unwrap();
         }
+
+        info!("connection map size: {:?}", self.state_map.len());
 
         info!("remove connection {:?}", conn);
     }

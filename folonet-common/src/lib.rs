@@ -8,6 +8,8 @@ pub mod event;
 pub mod maps;
 pub mod queue;
 
+pub const PORTS_QUEUE_SIZE: u32 = 50000;
+
 pub enum L4Hdr {
     TcpHdr(*mut TcpHdr),
     UdpHdr(*mut UdpHdr),

@@ -9,13 +9,14 @@ use aya_ebpf::{
     programs::XdpContext,
 };
 
-use aya_log_ebpf::{debug, warn};
+use aya_log_ebpf::debug;
 use core::{
     mem::{self, offset_of},
     ptr::copy,
 };
 use folonet_common::{
     csum_fold_helper, event::Event, BiPort, KConnection, KEndpoint, L4Hdr, Mac, Notification,
+    PORTS_QUEUE_SIZE,
 };
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -63,7 +64,7 @@ static IP_MAC_MAP: HashMap<u32, Mac> = HashMap::with_max_entries(1024, 0);
 static PACKET_EVENT: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
 
 #[map]
-static SERVICE_PORTS_1: Queue<u16> = Queue::with_max_entries(50000, 0);
+static SERVICE_PORTS: Queue<u16> = Queue::with_max_entries(PORTS_QUEUE_SIZE, 0);
 
 #[map]
 static LOCAL_IP_MAP: HashMap<u32, u32> = HashMap::with_max_entries(10, 0);
@@ -246,7 +247,7 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
             Some(to) => to,
             None => return Ok(xdp_action::XDP_PASS),
         };
-        let from_port = SERVICE_PORTS_1.pop();
+        let from_port = SERVICE_PORTS.pop();
         if from_port.is_none() {
             return Ok(xdp_action::XDP_DROP);
         }
