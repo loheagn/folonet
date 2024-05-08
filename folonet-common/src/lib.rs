@@ -74,6 +74,13 @@ impl L4Hdr {
             _ => None,
         }
     }
+
+    pub fn is_fin(&self) -> bool {
+        match self {
+            L4Hdr::TcpHdr(hdr) => unsafe { (**hdr).fin() != 0 },
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

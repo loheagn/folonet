@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-aya-bpf = { git = "https://github.com/aya-rs/aya" }
-aya-log-ebpf = { git = "https://github.com/aya-rs/aya" }
+aya-ebpf = "0.1.0"
+aya-log-ebpf = "0.1.0"
 bitflags = "2.4.1"
 folonet-common = { path = "../folonet-common" }
-network-types = "0.0.4"
+network-types = "0.0.5"
 
 [[bin]]
 name = "folonet"

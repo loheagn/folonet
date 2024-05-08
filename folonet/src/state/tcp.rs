@@ -17,7 +17,7 @@ use super::{CloseMsg, PacketHandler, PacketMsg};
 state_machine! {
     derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)
 
-    pub TCP(Closed)
+    pub TCP(Established)
 
     Closed => {
         PassiveOpen => Listen,
@@ -41,7 +41,7 @@ state_machine! {
         ReceiveFin => CloseWait,
     },
 
-    CloseWait(SendFin) => LastAck,
+    CloseWait(SendFin) => TimeWait,
 
     LastAck(RecvAckForFin) => Closed,
 
@@ -51,7 +51,7 @@ state_machine! {
     },
     FinWait1ReceiveFin(SendAckForFin) => Closing,
 
-    FinWait2(ReceiveFin) =>  FinWait2ReceiveFin,
+    FinWait2(ReceiveFin) =>  TimeWait,
     FinWait2ReceiveFin(SendAckForFin) => TimeWait,
 
     Closing(RecvAckForFin) => TimeWait,
@@ -125,9 +125,9 @@ pub struct TcpFsmState {
 impl TcpFsmState {
     pub fn new(e: &Endpoint) -> Self {
         let mut fsm = StateMachine::<TCP>::new();
-        if e.is_server_side() {
-            let _ = fsm.consume(&TCPInput::PassiveOpen);
-        }
+        // if e.is_server_side() {
+        //     let _ = fsm.consume(&TCPInput::PassiveOpen);
+        // }
         TcpFsmState {
             e: *e,
             fsm,

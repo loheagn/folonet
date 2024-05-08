@@ -119,6 +119,7 @@ async fn main() -> Result<(), anyhow::Error> {
         AyaHashmap::try_from(bpf.take_map("IP_MAC_MAP").unwrap()).unwrap();
     global_cfg.ip_mac_list.iter().for_each(|ip_mac| {
         let ip: u32 = ip_mac.ip.parse::<Ipv4Addr>().unwrap().into();
+        let ip = ip.to_be();
         let mac = mac_from_string(&ip_mac.mac).val();
         ip_mac_map.insert(&ip, &mac, 0).unwrap();
     });
