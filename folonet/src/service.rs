@@ -1,7 +1,8 @@
 use std::{collections::HashMap, sync::atomic::AtomicBool};
 
+use folonet_client::config::ServiceConfig;
+
 use crate::{
-    config::ServiceConfig,
     endpoint::Endpoint,
     message::{Message, MessageType},
     state::{BpfConnectionMap, BpfServicePortsMap, ConnectionStateMgr, PacketMsg},

@@ -152,6 +152,10 @@ impl KEndpoint {
         KEndpoint(val)
     }
 
+    pub fn from_bytes(bs: &[u8]) -> Self {
+        unsafe { *core::mem::transmute::<*const u8, *const KEndpoint>(bs.as_ptr()) }.clone()
+    }
+
     pub fn ip(&self) -> u32 {
         self.0 as u32
     }

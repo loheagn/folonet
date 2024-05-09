@@ -131,7 +131,7 @@ impl MsgHandler for ConnectionStateMgr {
             conn_map.remove(&u_conns.1).unwrap();
         }
 
-        info!("connection map size: {:?}", self.state_map.len());
+        // info!("connection map size: {:?}", self.state_map.len());
 
         info!("remove connection {:?}", conn);
     }

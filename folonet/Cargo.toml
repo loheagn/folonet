@@ -9,6 +9,7 @@ aya = "0.12"
 aya-log = "0.2"
 clap = { version = "4.1", features = ["derive"] }
 folonet-common = { path = "../folonet-common", features = ["user"] }
+folonet-client = { path = "../folonet-client" }
 anyhow = "1"
 env_logger = "0.11"
 libc = "0.2"
@@ -21,6 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 pnet = "0.34.0"
 once_cell = "1.19.0"
+mio = "0.8"
 
 [[bin]]
 name = "folonet"

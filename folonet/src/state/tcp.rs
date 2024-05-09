@@ -145,25 +145,25 @@ impl TcpFsmState {
 
         let direction = msg.direction(&self.e);
 
-        info!(
-            "endpoint {} connection state handles packet: {:?}, direction: {:?}",
-            self.e.to_string(),
-            packet,
-            direction,
-        );
+        // info!(
+        //     "endpoint {} connection state handles packet: {:?}, direction: {:?}",
+        //     self.e.to_string(),
+        //     packet,
+        //     direction,
+        // );
 
         self.check_input(&packet, &direction).iter().for_each(|e| {
             let old_state = self.fsm.state().clone();
 
             let _ = self.fsm.consume(e);
 
-            info!(
-                "{} input: {:?}, from {:?} to {:?}",
-                self.e.to_string(),
-                e,
-                old_state,
-                self.fsm.state()
-            )
+            // info!(
+            //     "{} input: {:?}, from {:?} to {:?}",
+            //     self.e.to_string(),
+            //     e,
+            //     old_state,
+            //     self.fsm.state()
+            // )
         });
 
         // last, we reord the special packet

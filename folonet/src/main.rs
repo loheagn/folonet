@@ -1,22 +1,27 @@
-use anyhow::{Context, Ok};
+use anyhow::Ok;
 use aya::maps::{HashMap as AyaHashmap, MapData as AyaMapData, Queue, RingBuf};
 use aya::programs::{Xdp, XdpFlags};
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
 use clap::Parser;
-use config::GlobalConfig;
-use folonet_common::Notification;
+use folonet_client::config::{GlobalConfig, ServiceConfig};
+use folonet_client::start_server;
 use folonet_common::PORTS_QUEUE_SIZE;
+use folonet_common::{KEndpoint, Notification};
 use log::{debug, error, info, warn};
+use mio::unix::SourceFd;
+use mio::{Events, Interest, Poll, Token};
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fs;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
 use std::os::fd::AsRawFd;
+use std::os::fd::RawFd;
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
-use tokio::runtime::Runtime;
 use tokio::signal;
+use tokio::time::{sleep, Duration};
 
 use crate::endpoint::{
     endpoint_pair_from_notification, mac_from_string, set_server_ip, Endpoint, UConnection,
@@ -27,7 +32,6 @@ use crate::net::get_interafce_index;
 use crate::service::Service;
 use crate::worker::MsgWorker;
 
-mod config;
 mod endpoint;
 mod message;
 mod net;
@@ -102,19 +106,23 @@ async fn main() -> Result<(), anyhow::Error> {
         AyaHashmap::try_from(bpf.take_map("SERVER_MAP").unwrap()).unwrap();
     global_cfg.services.iter().for_each(|service| {
         let local_endpoint = Endpoint::from(&service.local_endpoint);
-        let server_endpoint = Endpoint::from(service.servers.get(0).unwrap());
-        server_map
-            .insert(
-                &local_endpoint.to_u_endpoint(),
-                &server_endpoint.to_u_endpoint(),
-                0,
-            )
-            .unwrap();
+        if let Some(server) = service.servers.get(0) {
+            let server_endpoint = Endpoint::from(server);
+            server_map
+                .insert(
+                    &local_endpoint.to_u_endpoint(),
+                    &server_endpoint.to_u_endpoint(),
+                    0,
+                )
+                .unwrap();
+        }
+
         service
             .servers
             .iter()
             .for_each(|server| set_server_ip(&Endpoint::from(server).ip.to_string()));
     });
+    let server_map = Arc::new(tokio::sync::Mutex::new(server_map));
 
     let mut ip_mac_map: AyaHashmap<_, u32, u64> =
         AyaHashmap::try_from(bpf.take_map("IP_MAC_MAP").unwrap()).unwrap();
@@ -139,63 +147,150 @@ async fn main() -> Result<(), anyhow::Error> {
     });
 
     let mut bpf_packet_event_map = bpf.take_map("PACKET_EVENT").unwrap();
+    let mut bpf_cold_start_map = bpf.take_map("COLD_START_MAP").unwrap();
+    let mut bpf_door_bell_map = bpf.take_map("DOOR_BELL_MAP").unwrap();
+    let mut bpf_performance_map = bpf.take_map("PERFORMANCE_MAP").unwrap();
     let bpf_connection_map = bpf.take_map("CONNECTION").unwrap();
 
     let bpf_service_ports_map = bpf.take_map("SERVICE_PORTS").unwrap();
     let mut bpf_service_ports_map: Queue<_, u16> = Queue::try_from(bpf_service_ports_map).unwrap();
 
-    std::thread::spawn(move || {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let bpf_connection_map: AyaHashmap<AyaMapData, UConnection, UConnection> =
-                AyaHashmap::try_from(bpf_connection_map).unwrap();
-            let connection_map = Arc::new(tokio::sync::Mutex::new(bpf_connection_map));
+    let out_handle = tokio::spawn(async move {
+        let bpf_connection_map: AyaHashmap<AyaMapData, UConnection, UConnection> =
+            AyaHashmap::try_from(bpf_connection_map).unwrap();
+        let connection_map = Arc::new(tokio::sync::Mutex::new(bpf_connection_map));
 
-            let mut tcp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
-            let mut udp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
+        let mut tcp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
+        let mut udp_service_map: HashMap<Endpoint, MsgWorker<Service>> = HashMap::new();
 
-            // FIXME: fill the service maps
-            // let local_endpoint = Endpoint {
-            //     ip: Ipv4Addr::from(LOCAL_IP),
-            //     port: 80,
-            // };
-            // tcp_service_map.insert(
-            //     local_endpoint.clone(),
-            //     MsgWorker::new(Service::new(
-            //         "test".to_string(),
-            //         local_endpoint,
-            //         vec![Endpoint {
-            //             ip: Ipv4Addr::from(SERVER_IP),
-            //             port: 80,
-            //         }],
-            //         true,
-            //         connection_map.clone(),
-            //     )),
-            // );
-            for i in 10000..(10000 + PORTS_QUEUE_SIZE) {
-                bpf_service_ports_map.push(i as u16, 0).unwrap();
+        for i in 10000..(10000 + PORTS_QUEUE_SIZE) {
+            bpf_service_ports_map.push(i as u16, 0).unwrap();
+        }
+
+        let bpf_service_ports_map = Arc::new(tokio::sync::Mutex::new(bpf_service_ports_map));
+        global_cfg.services.iter().for_each(|service_cfg| {
+            if service_cfg.is_tcp && !service_cfg.servers.is_empty() {
+                tcp_service_map.insert(
+                    Endpoint::from(&service_cfg.local_endpoint),
+                    MsgWorker::new(Service::new(
+                        service_cfg,
+                        connection_map.clone(),
+                        bpf_service_ports_map.clone(),
+                    )),
+                );
             }
+        });
 
-            let bpf_service_ports_map = Arc::new(tokio::sync::Mutex::new(bpf_service_ports_map));
-            global_cfg.services.iter().for_each(|service_cfg| {
-                if service_cfg.is_tcp {
-                    tcp_service_map.insert(
-                        Endpoint::from(&service_cfg.local_endpoint),
-                        MsgWorker::new(Service::new(
-                            service_cfg,
-                            connection_map.clone(),
-                            bpf_service_ports_map.clone(),
-                        )),
-                    );
+        let tcp_service_map = Arc::new(tokio::sync::Mutex::new(tcp_service_map));
+
+        let tcp_service_map_clod_start = tcp_service_map.clone();
+        let bpf_conn_map_clod_start = connection_map.clone();
+        let bfp_ports_map_cold_start = bpf_service_ports_map.clone();
+        let cold_start_handle = tokio::spawn(async move {
+            let bpf_door_bell_map: AyaHashmap<_, UEndpoint, u8> =
+                AyaHashmap::try_from(bpf_door_bell_map).unwrap();
+            let bpf_performance_map: AyaHashmap<_, UEndpoint, u8> =
+                AyaHashmap::try_from(bpf_performance_map).unwrap();
+
+            let bpf_door_bell_map = Arc::new(tokio::sync::Mutex::new(bpf_door_bell_map));
+            let bpf_performance_map = Arc::new(tokio::sync::Mutex::new(bpf_performance_map));
+
+            let mut cold_start: RingBuf<&mut aya::maps::MapData> =
+                RingBuf::try_from(&mut bpf_cold_start_map).unwrap();
+            // let mut fd = AsyncFd::new(cold_start).unwrap();
+            loop {
+                // let mut guard = fd.readable_mut().await.unwrap();
+                // if let Some(item) = guard.get_inner_mut().next() {
+                if let Some(item) = cold_start.next() {
+                    let e = Endpoint::new(KEndpoint::from_bytes(item.deref()));
+                    let server_map = server_map.clone();
+                    let tcp_service_map = tcp_service_map_clod_start.clone();
+                    let bpf_connection_map = bpf_conn_map_clod_start.clone();
+                    let bpf_service_ports_map = bfp_ports_map_cold_start.clone();
+                    let bpf_door_bell_map = bpf_door_bell_map.clone();
+                    let bpf_performance_map = bpf_performance_map.clone();
+                    tokio::spawn(async move {
+                        let service_cfg = start_server(e.to_string()).await;
+                        if service_cfg.is_none() {
+                            return;
+                        }
+
+                        let service_cfg = service_cfg.unwrap();
+                        let server_endpoint = Endpoint::from(service_cfg.servers.get(0).unwrap());
+                        {
+                            let mut server_map = server_map.lock().await;
+                            server_map
+                                .insert(&e.to_u_endpoint(), &server_endpoint.to_u_endpoint(), 0)
+                                .unwrap();
+                            let mut tcp_service_map = tcp_service_map.lock().await;
+                            tcp_service_map.insert(
+                                Endpoint::from(&service_cfg.local_endpoint),
+                                MsgWorker::new(Service::new(
+                                    &service_cfg,
+                                    bpf_connection_map.clone(),
+                                    bpf_service_ports_map.clone(),
+                                )),
+                            );
+                        }
+
+                        // listen to stop
+                        const DURATION: Duration = Duration::from_secs(15);
+                        loop {
+                            let val0 = 0u8;
+                            let val1 = 1u8;
+
+                            // start to record
+                            {
+                                let mut bpf_door_bell_map = bpf_door_bell_map.lock().await;
+                                bpf_door_bell_map
+                                    .insert(&e.to_u_endpoint(), &val1, 0)
+                                    .unwrap();
+                            }
+                            sleep(DURATION).await;
+
+                            {
+                                let mut bpf_door_bell_map = bpf_door_bell_map.lock().await;
+                                let mut bpf_performance_map = bpf_performance_map.lock().await;
+                                // stop to record
+                                bpf_door_bell_map
+                                    .insert(&e.to_u_endpoint(), &val0, 0)
+                                    .unwrap();
+                                // check whether need to stop server
+                                let cnt = bpf_performance_map.get(&e.to_u_endpoint(), 0);
+                                if cnt.is_err() || cnt.unwrap() == 0 {
+                                    // stop server
+                                    info!("stop server {}", e.to_string());
+
+                                    let mut server_map = server_map.lock().await;
+                                    server_map.remove(&e.to_u_endpoint()).unwrap();
+                                    let mut tcp_service_map = tcp_service_map.lock().await;
+                                    tcp_service_map.remove(&e).unwrap();
+                                    break;
+                                }
+                                // clear performance map
+                                bpf_performance_map
+                                    .insert(&e.to_u_endpoint(), &val0, 0)
+                                    .unwrap();
+                            }
+                            sleep(DURATION).await;
+                        }
+                    });
+                } else {
+                    sleep(Duration::from_millis(100)).await;
                 }
-            });
+                // guard.clear_ready();
+            }
+        });
 
+        // deal with packets to drive state machine
+        let packet_handle = tokio::spawn(async move {
             let mut ring_buf: RingBuf<&mut aya::maps::MapData> =
                 RingBuf::try_from(&mut bpf_packet_event_map).unwrap();
-            let fd = AsyncFd::new(ring_buf.as_raw_fd()).unwrap();
-            loop {
-                let _ = fd.readable().await.unwrap();
 
+            loop {
+                // let mut guard = fd.readable_mut().await.unwrap();
+
+                // if let Some(item) = guard.get_inner_mut().next() {
                 if let Some(item) = ring_buf.next() {
                     let notification = Notification::from_bytes(item.deref());
                     let (from_endpoint, to_endpoint) =
@@ -209,14 +304,15 @@ async fn main() -> Result<(), anyhow::Error> {
                         to_endpoint.to_string()
                     );
 
-                    info!(
-                        "local_in_endpoint {} lcoal_out_endpoint {}",
-                        local_in_endpoint.to_string(),
-                        local_out_endpoint.to_string(),
-                    );
+                    // info!(
+                    //     "local_in_endpoint {} lcoal_out_endpoint {}",
+                    //     local_in_endpoint.to_string(),
+                    //     local_out_endpoint.to_string(),
+                    // );
 
                     let mut from_client = true;
 
+                    let tcp_service_map = tcp_service_map.lock().await;
                     let service = if notification.is_tcp() {
                         tcp_service_map.get(&local_in_endpoint).or_else(|| {
                             from_client = false;
@@ -242,13 +338,23 @@ async fn main() -> Result<(), anyhow::Error> {
                             }
                         }
                     }
+                } else {
+                    sleep(Duration::from_millis(100)).await;
                 }
             }
         });
+
+        info!("Waiting for Ctrl-C...");
+        signal::ctrl_c().await.unwrap();
+
+        cold_start_handle.abort();
+        info!("Waiting for cold start to finish...");
+        packet_handle.abort();
+        info!("Waiting for packet handle to finish...");
     });
 
-    info!("Waiting for Ctrl-C...");
-    signal::ctrl_c().await?;
+    out_handle.await.unwrap();
+
     info!("Exiting...");
 
     Ok(())

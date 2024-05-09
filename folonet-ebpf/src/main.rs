@@ -5,12 +5,13 @@ use aya_ebpf::{
     bindings::xdp_action,
     helpers::bpf_csum_diff,
     macros::{map, xdp},
-    maps::{HashMap, Queue, RingBuf},
+    maps::{HashMap, Queue, RingBuf, Stack},
     programs::XdpContext,
 };
 
-use aya_log_ebpf::debug;
+use aya_log_ebpf::{debug, info, warn};
 use core::{
+    hash::Hash,
     mem::{self, offset_of},
     ptr::copy,
 };
@@ -61,13 +62,22 @@ static SERVER_MAP: HashMap<KEndpoint, KEndpoint> = HashMap::with_max_entries(102
 static IP_MAC_MAP: HashMap<u32, Mac> = HashMap::with_max_entries(1024, 0);
 
 #[map]
-static PACKET_EVENT: RingBuf = RingBuf::with_byte_size(256 * 1024, 0);
+static PACKET_EVENT: RingBuf = RingBuf::with_byte_size(256 * 1024 * 10, 0);
 
 #[map]
 static SERVICE_PORTS: Queue<u16> = Queue::with_max_entries(PORTS_QUEUE_SIZE, 0);
 
 #[map]
 static LOCAL_IP_MAP: HashMap<u32, u32> = HashMap::with_max_entries(10, 0);
+
+#[map]
+static COLD_START_MAP: RingBuf = RingBuf::with_byte_size(256 * 1024 * 10, 0);
+
+#[map]
+static DOOR_BELL_MAP: HashMap<KEndpoint, u8> = HashMap::with_max_entries(102400, 0);
+
+#[map]
+static PERFORMANCE_MAP: HashMap<KEndpoint, u8> = HashMap::with_max_entries(102400, 0);
 
 #[inline(always)]
 fn extract_way(
@@ -242,27 +252,64 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
 
     let declare_way = extract_way(ethhdr, iphdr, &l4_hdr)?;
 
+    debug_connection(&ctx, &declare_way, "before check connection map").unwrap();
+
     if unsafe { CONNECTION.get(&declare_way) }.is_none() {
+        // debug_connection(&ctx, &declare_way, "cannot find output way").unwrap();
         let to = match unsafe { SERVER_MAP.get(&declare_way.to) } {
             Some(to) => to,
-            None => return Ok(xdp_action::XDP_PASS),
+            None => {
+                info!(
+                    &ctx,
+                    "need to cold start: {:i}:{}",
+                    declare_way.to.ip().to_be(),
+                    declare_way.to.port().to_be()
+                );
+
+                if let Some(mut e) = COLD_START_MAP.reserve::<KEndpoint>(0) {
+                    let endpoint = declare_way.to.clone();
+                    e.write(endpoint);
+                    e.submit(0);
+                }
+
+                return Ok(xdp_action::XDP_DROP);
+            }
         };
         let from_port = SERVICE_PORTS.pop();
         if from_port.is_none() {
+            info!(
+                &ctx,
+                "from port is none: {:i}:{}",
+                // SERVICE_PORTS.capacity(),
+                declare_way.to.ip().to_be(),
+                declare_way.to.port().to_be()
+            );
             return Ok(xdp_action::XDP_DROP);
         }
+        // debug_connection(&ctx, &declare_way, "get from port").unwrap();
         let from_port = from_port.unwrap();
         let local_ip = unsafe { LOCAL_IP_MAP.get(&ifidx) };
         if local_ip.is_none() {
+            info!(
+                &ctx,
+                "local ip is none: {:i}:{}",
+                declare_way.to.ip().to_be(),
+                declare_way.to.port().to_be()
+            );
             return Ok(xdp_action::XDP_DROP);
         }
+        // debug_connection(&ctx, &declare_way, "get local ip").unwrap();
         let local_ip = local_ip.unwrap();
         let from = KEndpoint::new(local_ip.to_be(), from_port.to_be());
+
+        // debug_connection(&ctx, &declare_way, "before insert connection map").unwrap();
 
         let out_way = KConnection { from, to: *to };
         CONNECTION
             .insert(&declare_way, &out_way, 0)
             .map_err(|_| ())?;
+
+        // debug_connection(&ctx, &declare_way, "after insert connection map").unwrap();
 
         // and, we need to record the return way
         let return_output_way = out_way.reverse();
@@ -275,12 +322,18 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
     let output_way = unsafe { CONNECTION.get(&declare_way) };
 
     if output_way.is_none() {
+        info!(
+            &ctx,
+            "output_way is none: {:i}:{}",
+            declare_way.to.ip().to_be(),
+            declare_way.to.port().to_be()
+        );
         return Ok(xdp_action::XDP_PASS);
     }
 
     let output_way = output_way.unwrap();
 
-    debug_connection(&ctx, &output_way, "output:")?;
+    // debug_connection(&ctx, &output_way, "output:")?;
 
     // notify to userspace
     if l4_hdr.is_fin() {
@@ -296,7 +349,47 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
             };
             e.write(notification);
             e.submit(0);
+            // info!(
+            //     &ctx,
+            //     "packet event is submit: {:i}:{}",
+            //     declare_way.to.ip().to_be(),
+            //     declare_way.to.port().to_be()
+            // );
+        } else {
+            info!(
+                &ctx,
+                "packet event is full: {:i}:{}",
+                declare_way.to.ip().to_be(),
+                declare_way.to.port().to_be()
+            );
         }
+    }
+
+    let target_endpoint = if let Some(v) = unsafe { DOOR_BELL_MAP.get(&declare_way.to) } {
+        if *v == 1 {
+            Some(&declare_way.to)
+        } else {
+            None
+        }
+    } else if let Some(v) = unsafe { DOOR_BELL_MAP.get(&output_way.from) } {
+        if *v == 1 {
+            Some(&output_way.from)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(target_endpoint) = target_endpoint {
+        let v = 1u8;
+        // info!(
+        //     &ctx,
+        //     "record performace: {:i}:{}",
+        //     target_endpoint.ip().to_be(),
+        //     target_endpoint.port().to_be()
+        // );
+        PERFORMANCE_MAP.insert(&target_endpoint, &v, 0).unwrap();
     }
 
     update_packet_by_way(&ctx, ethhdr, iphdr, &mut l4_hdr, &output_way)?;

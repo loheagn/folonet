@@ -25,7 +25,7 @@ impl<T> MsgWorker<T>
 where
     T: MsgHandler,
 {
-    const CHANNEL_SIZE: usize = 10240;
+    const CHANNEL_SIZE: usize = 102400;
     pub fn new(msg_handler: T) -> Self {
         let mut worker = MsgWorker {
             handler: Arc::new(Mutex::new(msg_handler)),
@@ -56,10 +56,6 @@ where
                         }
                     }
                 }
-                // if let Some(msg) = rx.recv().await {
-                //     let mut handler = handler.lock().await;
-                //     handler.handle_message(msg).await;
-                // }
             }
         });
 

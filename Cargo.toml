@@ -1,2 +1,2 @@
 [workspace]
-members = ["xtask", "folonet", "folonet-common"]
+members = ["xtask", "folonet", "folonet-common", "folonet-client"]
