@@ -4,7 +4,9 @@ pub mod folonetrpc {
     tonic::include_proto!("folonetrpc");
 }
 
-use folonetrpc::{server_manager_client::ServerManagerClient, StartServerRequest};
+use folonetrpc::{
+    server_manager_client::ServerManagerClient, StartServerRequest, StopServerRequest,
+};
 
 pub mod config;
 
@@ -38,6 +40,17 @@ pub async fn start_server(local_endpoint: String) -> Option<config::ServiceConfi
         servers: vec![server.server_endpoint.clone()],
         is_tcp: true,
     })
+}
+
+pub async fn stop_server(local_endpoint: String) {
+    let mut client = get_server_manager_client().await;
+    let _ = client
+        .stop_server(Request::new(StopServerRequest {
+            local_endpoint: local_endpoint.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
 }
 
 #[cfg(test)]

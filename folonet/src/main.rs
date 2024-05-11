@@ -5,14 +5,14 @@ use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
 use clap::Parser;
 use folonet_client::config::{GlobalConfig, ServiceConfig};
-use folonet_client::start_server;
+use folonet_client::{start_server, stop_server};
 use folonet_common::PORTS_QUEUE_SIZE;
 use folonet_common::{KEndpoint, Notification};
 use log::{debug, error, info, warn};
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 use std::ops::Deref;
@@ -212,6 +212,8 @@ async fn main() -> Result<(), anyhow::Error> {
             let bpf_door_bell_map = Arc::new(tokio::sync::Mutex::new(bpf_door_bell_map));
             let bpf_performance_map = Arc::new(tokio::sync::Mutex::new(bpf_performance_map));
 
+            let mut cold_start_task_set: HashSet<Endpoint> = HashSet::new();
+
             let mut cold_start: RingBuf<&mut aya::maps::MapData> =
                 RingBuf::try_from(&mut bpf_cold_start_map).unwrap();
             // let mut fd = AsyncFd::new(cold_start).unwrap();
@@ -220,6 +222,10 @@ async fn main() -> Result<(), anyhow::Error> {
                 // if let Some(item) = guard.get_inner_mut().next() {
                 if let Some(item) = cold_start.next() {
                     let e = Endpoint::new(KEndpoint::from_bytes(item.deref()));
+                    if cold_start_task_set.contains(&e) {
+                        continue;
+                    }
+                    cold_start_task_set.insert(e.clone());
                     let server_map = server_map.clone();
                     let tcp_service_map = tcp_service_map_clod_start.clone();
                     let bpf_connection_map = bpf_conn_map_clod_start.clone();
@@ -279,9 +285,15 @@ async fn main() -> Result<(), anyhow::Error> {
                                     info!("stop server {}", e.to_string());
 
                                     let mut server_map = server_map.lock().await;
-                                    server_map.remove(&e.to_u_endpoint()).unwrap();
+                                    if server_map.get(&e.to_u_endpoint(), 0).is_ok() {
+                                        server_map.remove(&e.to_u_endpoint()).unwrap();
+                                    }
                                     let mut tcp_service_map = tcp_service_map.lock().await;
-                                    tcp_service_map.remove(&e).unwrap();
+                                    if tcp_service_map.get(&e).is_some() {
+                                        tcp_service_map.remove(&e).unwrap();
+                                    }
+
+                                    stop_server(e.to_string()).await;
                                     break;
                                 }
                                 // clear performance map
@@ -292,6 +304,8 @@ async fn main() -> Result<(), anyhow::Error> {
                             sleep(DURATION).await;
                         }
                     });
+
+                    cold_start_task_set.remove(&e);
                 } else {
                     sleep(Duration::from_millis(100)).await;
                 }

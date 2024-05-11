@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	ServerManager_StartServer_FullMethodName = "/folonetrpc.ServerManager/StartServer"
+	ServerManager_StopServer_FullMethodName  = "/folonetrpc.ServerManager/StopServer"
 )
 
 // ServerManagerClient is the client API for ServerManager service.
@@ -27,6 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ServerManagerClient interface {
 	StartServer(ctx context.Context, in *StartServerRequest, opts ...grpc.CallOption) (*StartServerResponse, error)
+	StopServer(ctx context.Context, in *StopServerRequest, opts ...grpc.CallOption) (*StopServerResponse, error)
 }
 
 type serverManagerClient struct {
@@ -46,11 +48,21 @@ func (c *serverManagerClient) StartServer(ctx context.Context, in *StartServerRe
 	return out, nil
 }
 
+func (c *serverManagerClient) StopServer(ctx context.Context, in *StopServerRequest, opts ...grpc.CallOption) (*StopServerResponse, error) {
+	out := new(StopServerResponse)
+	err := c.cc.Invoke(ctx, ServerManager_StopServer_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ServerManagerServer is the server API for ServerManager service.
 // All implementations must embed UnimplementedServerManagerServer
 // for forward compatibility
 type ServerManagerServer interface {
 	StartServer(context.Context, *StartServerRequest) (*StartServerResponse, error)
+	StopServer(context.Context, *StopServerRequest) (*StopServerResponse, error)
 	mustEmbedUnimplementedServerManagerServer()
 }
 
@@ -60,6 +72,9 @@ type UnimplementedServerManagerServer struct {
 
 func (UnimplementedServerManagerServer) StartServer(context.Context, *StartServerRequest) (*StartServerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartServer not implemented")
+}
+func (UnimplementedServerManagerServer) StopServer(context.Context, *StopServerRequest) (*StopServerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StopServer not implemented")
 }
 func (UnimplementedServerManagerServer) mustEmbedUnimplementedServerManagerServer() {}
 
@@ -92,6 +107,24 @@ func _ServerManager_StartServer_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ServerManager_StopServer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StopServerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ServerManagerServer).StopServer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ServerManager_StopServer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ServerManagerServer).StopServer(ctx, req.(*StopServerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ServerManager_ServiceDesc is the grpc.ServiceDesc for ServerManager service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -102,6 +135,10 @@ var ServerManager_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StartServer",
 			Handler:    _ServerManager_StartServer_Handler,
+		},
+		{
+			MethodName: "StopServer",
+			Handler:    _ServerManager_StopServer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
