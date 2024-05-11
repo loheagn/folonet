@@ -259,6 +259,12 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()> {
         let to = match unsafe { SERVER_MAP.get(&declare_way.to) } {
             Some(to) => to,
             None => {
+                let port = declare_way.to.port().to_be();
+                if port < 8000 || port > 9999 {
+                    // do not bother other ports
+                    return Ok(xdp_action::XDP_PASS);
+                }
+
                 info!(
                     &ctx,
                     "need to cold start: {:i}:{}",

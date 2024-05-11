@@ -14,7 +14,7 @@ use mio::{Events, Interest, Poll, Token};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fs;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, TcpListener, UdpSocket};
 use std::ops::Deref;
 use std::os::fd::AsRawFd;
 use std::os::fd::RawFd;
@@ -101,6 +101,23 @@ async fn main() -> Result<(), anyhow::Error> {
     });
 
     // init maps
+    let start_port = 8000u16;
+    let end_port = 9999u16;
+
+    for port in start_port..=end_port {
+        let tcp_address = format!("127.0.0.1:{}", port);
+        let udp_address = format!("127.0.0.1:{}", port);
+
+        // 尝试TCP端口
+        if let Result::Err(_) = TcpListener::bind(&tcp_address) {
+            panic!("TCP Port {} is not free.", port);
+        }
+
+        // 尝试UDP端口
+        if let Result::Err(_) = UdpSocket::bind(&udp_address) {
+            panic!("UDP Port {} is not free.", port);
+        }
+    }
 
     let mut server_map: AyaHashmap<_, UEndpoint, UEndpoint> =
         AyaHashmap::try_from(bpf.take_map("SERVER_MAP").unwrap()).unwrap();
@@ -142,7 +159,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .map(|i| i.name.clone())
         .collect();
     iface_list.iter().for_each(|iface| {
-        program.attach(iface, XdpFlags::DRV_MODE).unwrap();
+        program.attach(iface, XdpFlags::SKB_MODE).unwrap();
         // .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE").unwrap();
     });
 
