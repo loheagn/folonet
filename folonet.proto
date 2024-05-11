@@ -4,18 +4,16 @@ package folonetrpc;
 
 option go_package="./folonetrpc";
 
-// 定义服务
 service ServerManager {
-  // 定义一个RPC方法
   rpc StartServer (StartServerRequest) returns (StartServerResponse) {}
 }
 
-// 定义传入的消息
 message StartServerRequest {
   string localEndpoint = 1;
 }
 
-// 定义返回的消息
 message StartServerResponse {
   string serverEndpoint = 1;
+  bool active = 2;
+  string name = 3;
 }
