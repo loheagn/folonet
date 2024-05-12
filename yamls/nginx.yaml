@@ -13,6 +13,8 @@ spec:
     metadata:
       labels:
         app: nginx
+      annotations:
+        "cni.projectcalico.org/ipAddrs": "[\"192.168.100.100\"]"
     spec:
       containers:
       - name: nginx
